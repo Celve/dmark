@@ -17,8 +17,8 @@ class Watermark:
         self.assumed = torch.ones(gen_len, dtype=torch.int32) * -1
         self.double = 0
         self.green = 0
-    
-    def apply(
+
+    def apply_once(
         self,
         curr_logits: torch.Tensor,
         pos: int,
@@ -37,10 +37,9 @@ class Watermark:
             curr_logits
         )  # TODO: we have to support different sampling methods
         if self.assumed[pos] != -1 and sampled != self.assumed[pos]:
-            ndarray = self.bitmap.get_row(sampled.item())
-            next_bias = (
-                torch.from_numpy(ndarray).to(torch.bool) * self.watermark_config.delta
-            ).to("cuda")
+            row_tensor = self.bitmap.get_col(sampled.item())
+            next_bias = row_tensor.float() * self.watermark_config.delta
+            next_bias = next_bias.to(curr_logits.device)
             self.double += 1
 
         biased_logits = curr_logits + prev_bias + next_bias
@@ -48,13 +47,19 @@ class Watermark:
         green_list = self.watermark_config.gen_green_list(prev_token).bool()
         if green_list[result.item()].item():
             self.green += 1
-        else: 
-            print("curr_logits topk(10):")
-            values, indices = curr_logits.topk(10)
-            for i in range(10):
-                print(f"  index: {indices[i].item()}, value: {values[i].item()}")
-            print("biased_logits topk(10):")
-            b_values, b_indices = biased_logits.topk(10)
-            for i in range(10):
-                print(f"  index: {b_indices[i].item()}, value: {b_values[i].item()}")
         return result
+
+    def apply_all(
+        self, logits: torch.Tensor, start_index: int, end_index: int
+    ) -> torch.Tensor:
+        biased_logits = logits.clone()
+        predicted = logits[:, start_index:end_index].argmax(dim=-1)
+        for i in range(logits.shape[0]):
+            bias = (
+                self.bitmap.get_rows(
+                    predicted[i, start_index - 1 : end_index - 1]
+                ).float()
+                * self.watermark_config.delta
+            )
+            biased_logits[i, start_index:end_index] += bias
+        return biased_logits

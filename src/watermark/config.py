@@ -1,23 +1,33 @@
 import json
+
 import torch
 
 
 class WatermarkConfig:
-    def __init__(self, vocab_size: int, ratio: float, delta: float, key: int):
+    def __init__(
+        self,
+        vocab_size: int,
+        ratio: float,
+        delta: float,
+        key: int,
+        prebias: bool = False,
+    ):
         self.vocab_size = vocab_size
         self.ratio = ratio
         self.delta = delta
         self.key = key
+        self.prebias = prebias
 
     @classmethod
     def from_json(cls, json_file: str) -> "WatermarkConfig":
-        with open(json_file, 'r') as f:
+        with open(json_file, "r") as f:
             data = json.load(f)
         return cls(
-            vocab_size=data['vocab_size'],
-            ratio=data['ratio'],
-            delta=data['delta'],
-            key=data['key']
+            vocab_size=data["vocab_size"],
+            ratio=data["ratio"],
+            delta=data["delta"],
+            key=data["key"],
+            prebias=data["prebias"],
         )
 
     def gen_green_list(self, prev_token: torch.Tensor) -> torch.Tensor:

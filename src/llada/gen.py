@@ -6,9 +6,9 @@ import torch.nn.functional as F
 from transformers import AutoModel, AutoTokenizer
 
 from watermark.config import WatermarkConfig
+from watermark.detect import Detector
 from watermark.persistent_bitmap import PersistentBitmap
 from watermark.watermark import Watermark
-from watermark.detect import Detector
 
 
 def add_gumbel_noise(logits, temperature):
@@ -116,10 +116,19 @@ def generate(
                 logits = model(x).logits
 
             logits_with_noise = add_gumbel_noise(logits, temperature=temperature)
-            x0 = torch.argmax(logits_with_noise, dim=-1)  # b, l
+            if watermark is not None and watermark.config.prebias:
+                logits_todo = watermark.apply_all(
+                    logits_with_noise,
+                    prompt.shape[1] + num_block * block_length,
+                    prompt.shape[1] + (num_block + 1) * block_length,
+                )
+            else:
+                logits_todo = logits_with_noise
+
+            x0 = torch.argmax(logits_todo, dim=-1)  # b, l
 
             if remasking == "low_confidence":
-                p = F.softmax(logits, dim=-1)
+                p = F.softmax(logits_todo, dim=-1)
                 x0_p = torch.squeeze(
                     torch.gather(p, dim=-1, index=torch.unsqueeze(x0, -1)), -1
                 )  # b, l
@@ -142,7 +151,7 @@ def generate(
                     select_indices.sort()
                     for index in select_indices:
                         if x[j, index - 1] == mask_id:
-                            prev_logits = logits_with_noise[j, index - 1]
+                            prev_logits = logits_todo[j, index - 1]
                             prev_token = None
                         else:
                             prev_logits = None
@@ -209,7 +218,11 @@ def main():
             0
         ]
     )
-    print(out.shape[1] - input_ids.shape[1], watermark.double / (out.shape[1] - input_ids.shape[1]), watermark.green / (out.shape[1] - input_ids.shape[1]))
+    print(
+        out.shape[1] - input_ids.shape[1],
+        watermark.double / (out.shape[1] - input_ids.shape[1]),
+        watermark.green / (out.shape[1] - input_ids.shape[1]),
+    )
     print(Detector(watermark_config).detect(out[0], input_ids.shape[1]))
 
 

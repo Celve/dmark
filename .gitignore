@@ -1,0 +1,73 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb_checkpoints/
+
+# PyCharm
+.idea/
+
+# VS Code
+.vscode/
+
+# Environment
+.env
+.envrc
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+*.bin
+watermark.bin
+config.json
+configs/*.json
+!configs/watermark_example.json
+!configs/watermark_small.json
+
+# Model weights and data
+*.pt
+*.pth
+*.safetensors
+*.ckpt
+checkpoints/
+models/
+data/
+
+# Logs
+*.log
+logs/
+runs/
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Claude
+CLAUDE.md

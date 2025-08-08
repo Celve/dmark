@@ -11,11 +11,14 @@ class Detector:
 
     def detect(self, tokens: torch.Tensor, prompt_len: int) -> float:
         detected = 0
-        gen_len = tokens.shape[0] - prompt_len
+        gen_len = 0
         for index in range(prompt_len, tokens.shape[0]):
             prev_token = tokens[index - 1]
             curr_token = tokens[index]
+            if curr_token == 126081: 
+                break
             green_list = self.config.gen_green_list(prev_token).bool()
             if green_list[curr_token.item()]:
                 detected += 1
-        return 2 * (detected - gen_len / 2) / math.sqrt(gen_len)
+            gen_len += 1
+        return detected / gen_len

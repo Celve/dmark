@@ -1,9 +1,12 @@
+import json
 from typing import Optional
 
 import numpy as np
+from tqdm import tqdm
 import torch
 import torch.nn.functional as F
 from transformers import AutoModel, AutoTokenizer
+from datasets import load_dataset
 
 from watermark.config import WatermarkConfig
 from watermark.detect import Detector
@@ -171,7 +174,12 @@ def generate(
 
 def main():
     device = "cuda"
-    watermark_config = WatermarkConfig(vocab_size=126464, ratio=0.5, delta=2.0, key=42, prebias=True, enable_reverse=True)
+    dataset_path = "sentence-transformers/eli5"
+    enable_watermark = False
+
+    dataset = load_dataset(dataset_path, split='train')
+
+    watermark_config = WatermarkConfig(vocab_size=126464, ratio=0.5, delta=3.0, key=42, prebias=True, enable_reverse=True)
     bitmap = PersistentBitmap(watermark_config.vocab_size, "../bitmapt.bin")
     watermark = Watermark(watermark_config, bitmap)
 
@@ -188,38 +196,46 @@ def main():
         "GSAI-ML/LLaDA-8B-Instruct", trust_remote_code=True
     )
 
-    prompt = "A robe takes 2 bolts of blue fiber and half that much white fiber.  How many bolts in total does it take?"
-    prompt = "<|startoftext|><|start_header_id|>user<|end_header_id|>\n\nYou are a math expert. You will be given a question to solve. Solve it step by step. Wrap the final answer in a \\boxed{}. \nRespond in the following format:\n<reasoning>\nYour reasoning here\n</reasoning>\n<answer>\n\\boxed{...}\n</answer>\n\nCarla is downloading a 200 GB file. Normally she can download 2 GB/minute, but 40% of the way through the download, Windows forces a restart to install updates, which takes 20 minutes. Then Carla has to restart the download from the beginning. How load does it take to download the file?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n<reasoning>"
+    results = []
 
-    # Add special tokens for the Instruct model. The Base model does not require the following two lines.
-    # m = [
-    #     {"role": "user", "content": prompt},
-    # ]
-    # prompt = tokenizer.apply_chat_template(
-    #     m, add_generation_prompt=True, tokenize=False
-    # )
-
-    input_ids = tokenizer(prompt)["input_ids"]
-    input_ids = torch.tensor(input_ids).to(device).unsqueeze(0)
-
-    out = generate(
-        model,
-        input_ids,
-        steps=128,
-        gen_length=128,
-        block_length=32,
-        temperature=0.0,
-        cfg_scale=0.0,
-        remasking="low_confidence",
-        watermark=watermark,
-    )
-    print(
-        tokenizer.batch_decode(out[:, input_ids.shape[1] :], skip_special_tokens=True)[
-            0
+    for i in tqdm(range(20), desc="Processing dataset"):
+        prompt = dataset[i]['question']
+        gt = dataset[i]['answer']
+        m = [
+            {"role": "user", "content": prompt},
         ]
-    )
-    print(Detector(watermark_config).detect(out[0], input_ids.shape[1]))
+        prompt = tokenizer.apply_chat_template(
+            m, add_generation_prompt=True, tokenize=False
+        )
 
+        input_ids = tokenizer(prompt)["input_ids"]
+        input_ids = torch.tensor(input_ids).to(device).unsqueeze(0)
+
+        out = generate(
+            model,
+            input_ids,
+            steps=128,
+            gen_length=256,
+            block_length=32,
+            temperature=0.0,
+            cfg_scale=0.0,
+            remasking="low_confidence",
+            watermark=watermark if enable_watermark else None,
+        )
+
+        output = tokenizer.batch_decode(out[:, input_ids.shape[1] :], skip_special_tokens=True)[0]
+        z_score = Detector(watermark_config).detect(out[0], input_ids.shape[1])
+        results.append({
+            "prompt": prompt,
+            "ground_truth": gt,
+            "output": output,
+            "z_score": z_score,
+        })
+    
+    result_name = f"results_{dataset_path.split('/')[-1]}_ratio{watermark_config.ratio}_delta{watermark_config.delta}_key{watermark_config.key}_prebias{watermark_config.prebias}_enable_reverse{watermark_config.enable_reverse}.json"
+
+    with open(result_name, "w") as f:
+        json.dump(results, f, indent=4)
 
 if __name__ == "__main__":
     main()

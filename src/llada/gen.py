@@ -1,7 +1,11 @@
+from typing import Optional
+
 import numpy as np
 import torch
 import torch.nn.functional as F
 from transformers import AutoModel, AutoTokenizer
+
+from watermark.watermark import Watermark
 
 
 def add_gumbel_noise(logits, temperature):
@@ -55,6 +59,7 @@ def generate(
     cfg_scale=0.0,
     remasking="low_confidence",
     mask_id=126336,
+    watermark: Optional[Watermark] = None,
 ):
     """
     Args:
@@ -125,6 +130,24 @@ def generate(
             transfer_index = torch.zeros_like(x0, dtype=torch.bool, device=x0.device)
             for j in range(confidence.shape[0]):
                 _, select_index = torch.topk(confidence[j], k=num_transfer_tokens[j, i])
+
+                if watermark is not None:
+                    select_indices = select_index.tolist()
+                    select_indices.sort()
+                    for index in select_indices:
+                        if x[j, index - 1] == mask_id:
+                            prev_logits = logits[j, index - 1]
+                            prev_token = None
+                        else:
+                            prev_logits = None
+                            prev_token = x[j, index - 1]
+                        x0[j, index] = watermark.apply(
+                            logits[j, index],
+                            index - prompt.shape[1],
+                            prev_logits,
+                            prev_token,
+                        )
+
                 transfer_index[j, select_index] = True
             x[transfer_index] = x0[transfer_index]
 

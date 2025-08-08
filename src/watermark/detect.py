@@ -1,0 +1,21 @@
+import math
+
+import torch
+
+from watermark.config import WatermarkConfig
+
+
+class Detector:
+    def __init__(self, watermark_config: WatermarkConfig):
+        self.config = watermark_config
+
+    def detect(self, tokens: torch.Tensor, prompt_len: int) -> float:
+        detected = 0
+        gen_len = tokens.shape[0] - prompt_len
+        for index in range(prompt_len, tokens.shape[0]):
+            prev_token = tokens[index - 1]
+            curr_token = tokens[index]
+            green_list = self.config.gen_green_list(prev_token).bool()
+            if green_list[curr_token.item()]:
+                detected += 1
+        return 2 * (detected - gen_len / 2) / math.sqrt(gen_len)

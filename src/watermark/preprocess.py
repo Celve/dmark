@@ -16,10 +16,10 @@ def preprocess(watermark_config: WatermarkConfig, file_path: str):
 
     for token in tqdm(range(watermark_config.vocab_size), desc="Processing tokens"):
         green_list = watermark_config.gen_green_list(torch.tensor(token)).bool()
-        green_indices = green_list.nonzero().squeeze().tolist()
-        for green_token in green_indices:
-            persistent_bitmap.set_bit(green_token, token, True)
+        green_list_ndarray = green_list.numpy()
+        persistent_bitmap.set_row(token, green_list_ndarray)
 
+    persistent_bitmap.transpose()
     persistent_bitmap.save()
 
     total_time = time.time() - start_time

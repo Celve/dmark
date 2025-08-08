@@ -12,10 +12,12 @@ class Watermark:
         self.bitmap = bitmap
         self.gen_len = None
 
-    def init(self, prompt: torch.Tensor, gen_len: int):
+    def init(self, gen_len: int):
         self.gen_len = gen_len
         self.assumed = torch.ones(gen_len, dtype=torch.int32) * -1
-
+        self.double = 0
+        self.green = 0
+    
     def apply(
         self,
         curr_logits: torch.Tensor,
@@ -38,7 +40,21 @@ class Watermark:
             ndarray = self.bitmap.get_row(sampled.item())
             next_bias = (
                 torch.from_numpy(ndarray).to(torch.bool) * self.watermark_config.delta
-            )
+            ).to("cuda")
+            self.double += 1
 
         biased_logits = curr_logits + prev_bias + next_bias
-        return torch.argmax(biased_logits)  # TODO: sampling also matters here
+        result = torch.argmax(biased_logits)  # TODO: sampling also matters here
+        green_list = self.watermark_config.gen_green_list(prev_token).bool()
+        if green_list[result.item()].item():
+            self.green += 1
+        else: 
+            print("curr_logits topk(10):")
+            values, indices = curr_logits.topk(10)
+            for i in range(10):
+                print(f"  index: {indices[i].item()}, value: {values[i].item()}")
+            print("biased_logits topk(10):")
+            b_values, b_indices = biased_logits.topk(10)
+            for i in range(10):
+                print(f"  index: {b_indices[i].item()}, value: {b_values[i].item()}")
+        return result

@@ -22,7 +22,7 @@ class WatermarkConfig:
 
     def gen_green_list(self, prev_token: torch.Tensor) -> torch.Tensor:
         torch.manual_seed(prev_token.item() * self.key)
-        return torch.bernoulli(torch.full((self.vocab_size,), self.ratio))
+        return torch.bernoulli(torch.full((self.vocab_size,), self.ratio)).to("cuda")
 
     def gen_bias(self, prev_token: torch.Tensor) -> torch.Tensor:
         return self.gen_green_list(prev_token) * self.delta

@@ -5,7 +5,10 @@ import torch
 import torch.nn.functional as F
 from transformers import AutoModel, AutoTokenizer
 
+from watermark.config import WatermarkConfig
+from watermark.persistent_bitmap import PersistentBitmap
 from watermark.watermark import Watermark
+from watermark.detect import Detector
 
 
 def add_gumbel_noise(logits, temperature):
@@ -73,6 +76,9 @@ def generate(
         remasking: Remasking strategy. 'low_confidence' or 'random'.
         mask_id: The toke id of [MASK] is 126336.
     """
+    if watermark is not None:
+        watermark.init(gen_length)
+
     x = torch.full((1, prompt.shape[1] + gen_length), mask_id, dtype=torch.long).to(
         model.device
     )
@@ -136,13 +142,13 @@ def generate(
                     select_indices.sort()
                     for index in select_indices:
                         if x[j, index - 1] == mask_id:
-                            prev_logits = logits[j, index - 1]
+                            prev_logits = logits_with_noise[j, index - 1]
                             prev_token = None
                         else:
                             prev_logits = None
                             prev_token = x[j, index - 1]
                         x0[j, index] = watermark.apply(
-                            logits[j, index],
+                            logits_with_noise[j, index],
                             index - prompt.shape[1],
                             prev_logits,
                             prev_token,
@@ -156,6 +162,9 @@ def generate(
 
 def main():
     device = "cuda"
+    watermark_config = WatermarkConfig(vocab_size=126464, ratio=0.5, delta=2.0, key=42)
+    bitmap = PersistentBitmap(watermark_config.vocab_size, "../bitmap.bin")
+    watermark = Watermark(watermark_config, bitmap)
 
     model = (
         AutoModel.from_pretrained(
@@ -170,15 +179,16 @@ def main():
         "GSAI-ML/LLaDA-8B-Instruct", trust_remote_code=True
     )
 
-    prompt = "Lily can run 12 kilometers per hour for 4 hours. After that, she runs 6 kilometers per hour. How many kilometers can she run in 8 hours?"
+    prompt = "A robe takes 2 bolts of blue fiber and half that much white fiber.  How many bolts in total does it take?"
+    prompt = "<|startoftext|><|start_header_id|>user<|end_header_id|>\n\nYou are a math expert. You will be given a question to solve. Solve it step by step. Wrap the final answer in a \\boxed{}. \nRespond in the following format:\n<reasoning>\nYour reasoning here\n</reasoning>\n<answer>\n\\boxed{...}\n</answer>\n\nCarla is downloading a 200 GB file. Normally she can download 2 GB/minute, but 40% of the way through the download, Windows forces a restart to install updates, which takes 20 minutes. Then Carla has to restart the download from the beginning. How load does it take to download the file?<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n<reasoning>"
 
     # Add special tokens for the Instruct model. The Base model does not require the following two lines.
-    m = [
-        {"role": "user", "content": prompt},
-    ]
-    prompt = tokenizer.apply_chat_template(
-        m, add_generation_prompt=True, tokenize=False
-    )
+    # m = [
+    #     {"role": "user", "content": prompt},
+    # ]
+    # prompt = tokenizer.apply_chat_template(
+    #     m, add_generation_prompt=True, tokenize=False
+    # )
 
     input_ids = tokenizer(prompt)["input_ids"]
     input_ids = torch.tensor(input_ids).to(device).unsqueeze(0)
@@ -192,12 +202,15 @@ def main():
         temperature=0.0,
         cfg_scale=0.0,
         remasking="low_confidence",
+        watermark=watermark,
     )
     print(
         tokenizer.batch_decode(out[:, input_ids.shape[1] :], skip_special_tokens=True)[
             0
         ]
     )
+    print(out.shape[1] - input_ids.shape[1], watermark.double / (out.shape[1] - input_ids.shape[1]), watermark.green / (out.shape[1] - input_ids.shape[1]))
+    print(Detector(watermark_config).detect(out[0], input_ids.shape[1]))
 
 
 if __name__ == "__main__":

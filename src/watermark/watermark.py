@@ -42,7 +42,9 @@ class Watermark:
             next_bias = next_bias.to(curr_logits.device)
             self.double += 1
 
-        biased_logits = curr_logits + prev_bias + next_bias
+        biased_logits = curr_logits + prev_bias
+        if self.watermark_config.enable_reverse:
+            biased_logits = biased_logits + next_bias
         result = torch.argmax(biased_logits)  # TODO: sampling also matters here
         green_list = self.watermark_config.gen_green_list(prev_token).bool()
         if green_list[result.item()].item():
@@ -57,7 +59,7 @@ class Watermark:
         for i in range(logits.shape[0]):
             bias = (
                 self.bitmap.get_rows(
-                    predicted[i, start_index - 1 : end_index - 1]
+                    predicted[i]
                 ).float()
                 * self.watermark_config.delta
             )

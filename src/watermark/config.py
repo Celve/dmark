@@ -11,12 +11,14 @@ class WatermarkConfig:
         delta: float,
         key: int,
         prebias: bool = False,
+        enable_reverse: bool = False,
     ):
         self.vocab_size = vocab_size
         self.ratio = ratio
         self.delta = delta
         self.key = key
         self.prebias = prebias
+        self.enable_reverse = enable_reverse
 
     @classmethod
     def from_json(cls, json_file: str) -> "WatermarkConfig":
@@ -28,6 +30,7 @@ class WatermarkConfig:
             delta=data["delta"],
             key=data["key"],
             prebias=data["prebias"],
+            enable_reverse=data["enable_reverse"],
         )
 
     def gen_green_list(self, prev_token: torch.Tensor) -> torch.Tensor:

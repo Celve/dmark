@@ -39,7 +39,7 @@ class PersistentBitmap:
         unpacked_bits = unpacked_bits[:needed_bits]
         
         # Convert to torch tensor and reshape
-        self.matrix = torch.from_numpy(unpacked_bits).bool().reshape(self.vocab_size, self.vocab_size)
+        self.matrix = torch.from_numpy(unpacked_bits).bool().reshape(self.vocab_size, self.vocab_size).to("cuda")
 
     def _save(self):
         # Convert to numpy for packing

@@ -116,7 +116,7 @@ def generate(
                 logits = model(x).logits
 
             logits_with_noise = add_gumbel_noise(logits, temperature=temperature)
-            if watermark is not None and watermark.config.prebias:
+            if watermark is not None and watermark.watermark_config.prebias:
                 logits_todo = watermark.apply_all(
                     logits_with_noise,
                     prompt.shape[1] + num_block * block_length,
@@ -156,7 +156,7 @@ def generate(
                         else:
                             prev_logits = None
                             prev_token = x[j, index - 1]
-                        x0[j, index] = watermark.apply(
+                        x0[j, index] = watermark.apply_once(
                             logits_with_noise[j, index],
                             index - prompt.shape[1],
                             prev_logits,
@@ -171,8 +171,8 @@ def generate(
 
 def main():
     device = "cuda"
-    watermark_config = WatermarkConfig(vocab_size=126464, ratio=0.5, delta=2.0, key=42)
-    bitmap = PersistentBitmap(watermark_config.vocab_size, "../bitmap.bin")
+    watermark_config = WatermarkConfig(vocab_size=126464, ratio=0.5, delta=2.0, key=42, prebias=True, enable_reverse=True)
+    bitmap = PersistentBitmap(watermark_config.vocab_size, "../bitmapt.bin")
     watermark = Watermark(watermark_config, bitmap)
 
     model = (
@@ -217,11 +217,6 @@ def main():
         tokenizer.batch_decode(out[:, input_ids.shape[1] :], skip_special_tokens=True)[
             0
         ]
-    )
-    print(
-        out.shape[1] - input_ids.shape[1],
-        watermark.double / (out.shape[1] - input_ids.shape[1]),
-        watermark.green / (out.shape[1] - input_ids.shape[1]),
     )
     print(Detector(watermark_config).detect(out[0], input_ids.shape[1]))
 

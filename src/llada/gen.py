@@ -1,3 +1,4 @@
+import argparse
 import json
 from typing import Optional
 
@@ -173,19 +174,65 @@ def generate(
 
 
 def main():
-    device = "cuda"
-    dataset_path = "sentence-transformers/eli5"
-    enable_watermark = False
+    parser = argparse.ArgumentParser(description="LLaDA text generation with optional watermarking")
+    
+    # Model arguments
+    parser.add_argument("--model", type=str, default="GSAI-ML/LLaDA-8B-Instruct", help="Model name or path")
+    parser.add_argument("--device", type=str, default="cuda", help="Device to use")
+    
+    # Dataset arguments
+    parser.add_argument("--dataset", type=str, default="sentence-transformers/eli5", help="Dataset path")
+    parser.add_argument("--num_samples", type=int, default=20, help="Number of samples to process")
+    
+    # Generation arguments
+    parser.add_argument("--steps", type=int, default=128, help="Number of generation steps")
+    parser.add_argument("--gen_length", type=int, default=256, help="Length of generated text")
+    parser.add_argument("--block_length", type=int, default=32, help="Block length for generation")
+    parser.add_argument("--temperature", type=float, default=0.0, help="Temperature for sampling")
+    parser.add_argument("--cfg_scale", type=float, default=0.0, help="CFG scale")
+    parser.add_argument("--remasking", type=str, default="low_confidence", choices=["low_confidence", "random"], help="Remasking strategy")
+    
+    # Watermark arguments
+    parser.add_argument("--enable_watermark", action="store_true", help="Enable watermarking")
+    parser.add_argument("--watermark_config", type=str, help="Path to watermark config JSON file")
+    parser.add_argument("--bitmap", type=str, default="../bitmap.bin", help="Path to bitmap file")
+    parser.add_argument("--vocab_size", type=int, default=126464, help="Vocabulary size")
+    parser.add_argument("--ratio", type=float, default=0.5, help="Watermark ratio")
+    parser.add_argument("--delta", type=float, default=3.0, help="Watermark delta")
+    parser.add_argument("--key", type=int, default=42, help="Watermark key")
+    parser.add_argument("--prebias", action="store_true", help="Enable prebias")
+    parser.add_argument("--enable_reverse", action="store_true", help="Enable reverse watermarking")
+    
+    # Output arguments
+    parser.add_argument("--output_dir", type=str, default=".", help="Output directory for results")
+    
+    args = parser.parse_args()
+    
+    device = args.device
+    dataset = load_dataset(args.dataset, split='train')
 
-    dataset = load_dataset(dataset_path, split='train')
-
-    watermark_config = WatermarkConfig(vocab_size=126464, ratio=0.5, delta=3.0, key=42, prebias=True, enable_reverse=True)
-    bitmap = PersistentBitmap(watermark_config.vocab_size, "../bitmapt.bin")
-    watermark = Watermark(watermark_config, bitmap)
+    # Load or create watermark config
+    if args.watermark_config:
+        watermark_config = WatermarkConfig.from_json(args.watermark_config)
+    else:
+        watermark_config = WatermarkConfig(
+            vocab_size=args.vocab_size,
+            ratio=args.ratio,
+            delta=args.delta,
+            key=args.key,
+            prebias=args.prebias,
+            enable_reverse=args.enable_reverse
+        )
+    
+    if args.enable_watermark:
+        bitmap = PersistentBitmap(watermark_config.vocab_size, args.bitmap)
+        watermark = Watermark(watermark_config, bitmap)
+    else:
+        watermark = None
 
     model = (
         AutoModel.from_pretrained(
-            "GSAI-ML/LLaDA-8B-Instruct",
+            args.model,
             trust_remote_code=True,
             torch_dtype=torch.bfloat16,
         )
@@ -193,12 +240,12 @@ def main():
         .eval()
     )
     tokenizer = AutoTokenizer.from_pretrained(
-        "GSAI-ML/LLaDA-8B-Instruct", trust_remote_code=True
+        args.model, trust_remote_code=True
     )
 
     results = []
 
-    for i in tqdm(range(20), desc="Processing dataset"):
+    for i in tqdm(range(args.num_samples), desc="Processing dataset"):
         prompt = dataset[i]['question']
         gt = dataset[i]['answer']
         m = [
@@ -214,17 +261,17 @@ def main():
         out = generate(
             model,
             input_ids,
-            steps=128,
-            gen_length=256,
-            block_length=32,
-            temperature=0.0,
-            cfg_scale=0.0,
-            remasking="low_confidence",
-            watermark=watermark if enable_watermark else None,
+            steps=args.steps,
+            gen_length=args.gen_length,
+            block_length=args.block_length,
+            temperature=args.temperature,
+            cfg_scale=args.cfg_scale,
+            remasking=args.remasking,
+            watermark=watermark,
         )
 
         output = tokenizer.batch_decode(out[:, input_ids.shape[1] :], skip_special_tokens=True)[0]
-        z_score = Detector(watermark_config).detect(out[0], input_ids.shape[1])
+        z_score = Detector(watermark_config).detect(out[0], input_ids.shape[1]) if args.enable_watermark else None
         results.append({
             "prompt": prompt,
             "ground_truth": gt,
@@ -232,10 +279,28 @@ def main():
             "z_score": z_score,
         })
     
-    result_name = f"results_{dataset_path.split('/')[-1]}_ratio{watermark_config.ratio}_delta{watermark_config.delta}_key{watermark_config.key}_prebias{watermark_config.prebias}_enable_reverse{watermark_config.enable_reverse}.json"
+    # Generate result filename based on arguments
+    dataset_name = args.dataset.split('/')[-1]
+    model_name = args.model.split('/')[-1]
+    
+    if args.enable_watermark:
+        result_name = f"results_{dataset_name}_{model_name}_wm_r{watermark_config.ratio}_d{watermark_config.delta}_k{watermark_config.key}"
+        if watermark_config.prebias:
+            result_name += "_prebias"
+        if watermark_config.enable_reverse:
+            result_name += "_reverse"
+    else:
+        result_name = f"results_{dataset_name}_{model_name}_no_wm"
+    
+    result_name += f"_s{args.steps}_l{args.gen_length}_b{args.block_length}_t{args.temperature}_n{args.num_samples}.json"
+    
+    import os
+    result_path = os.path.join(args.output_dir, result_name)
 
-    with open(result_name, "w") as f:
+    with open(result_path, "w") as f:
         json.dump(results, f, indent=4)
+    
+    print(f"Results saved to: {result_path}")
 
 if __name__ == "__main__":
     main()

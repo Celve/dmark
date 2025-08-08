@@ -1,0 +1,6 @@
+{
+  "vocab_size": 126464,
+  "ratio": 0.5,
+  "delta": 5.0,
+  "key": 42
+}

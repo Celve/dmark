@@ -3,15 +3,16 @@ import json
 from typing import Optional
 
 import numpy as np
-from tqdm import tqdm
 import torch
 import torch.nn.functional as F
-from transformers import AutoModel, AutoTokenizer
 from datasets import load_dataset
+from tqdm import tqdm
+from transformers import AutoModel, AutoTokenizer
 
 from watermark.config import WatermarkConfig
 from watermark.detect import Detector
 from watermark.persistent_bitmap import PersistentBitmap
+from watermark.ppl import PerplexityEval
 from watermark.watermark import Watermark
 
 
@@ -286,6 +287,7 @@ def main():
         .eval()
     )
     tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
+    perplexity_eval = PerplexityEval()
 
     results = []
 
@@ -320,6 +322,7 @@ def main():
         detect_rate, z_score = Detector(watermark_config).detect(
             out[0], input_ids.shape[1]
         )
+        ppl = perplexity_eval.evaluate(output)
         results.append(
             {
                 "prompt": prompt,
@@ -327,6 +330,7 @@ def main():
                 "output": output,
                 "detect_rate": detect_rate,
                 "z_score": z_score,
+                "ppl": ppl,
             }
         )
 

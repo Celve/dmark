@@ -24,44 +24,64 @@ class Watermark:
         pos: int,
         prev_logits: Optional[torch.Tensor],
         prev_token: Optional[torch.Tensor],
+        next_token: Optional[torch.Tensor],
     ) -> torch.Tensor:
-        if prev_token is not None:
-            prev_bias = self.watermark_config.gen_bias(prev_token)
-        else:
-            prev_token = prev_logits.argmax(dim=-1)
-            prev_bias = self.watermark_config.gen_bias(prev_token)
-            self.assumed[pos - 1] = prev_token
-
+        prev_bias = torch.zeros_like(curr_logits)
         next_bias = torch.zeros_like(curr_logits)
-        sampled = torch.argmax(
-            curr_logits
-        )  # TODO: we have to support different sampling methods
-        if self.assumed[pos] != -1 and sampled != self.assumed[pos]:
-            row_tensor = self.bitmap.get_col(sampled.item())
-            next_bias = row_tensor.float() * self.watermark_config.delta
-            next_bias = next_bias.to(curr_logits.device)
-            self.double += 1
 
-        biased_logits = curr_logits + prev_bias
-        if self.watermark_config.enable_reverse:
-            biased_logits = biased_logits + next_bias
+        if self.watermark_config.strategy == "normal":
+            if prev_token is not None:
+                prev_bias = (
+                    self.bitmap.get_row(prev_token.item()).float()
+                    * self.watermark_config.delta
+                )
+        else:
+            assert (
+                self.watermark_config.strategy == "reverse"
+                or self.watermark_config.strategy == "predict"
+            )
+
+            if prev_token is None:
+                prev_token = prev_logits.argmax(dim=-1)
+                self.assumed[pos - 1] = prev_token
+            prev_bias = (
+                self.bitmap.get_row(prev_token.item()).float()
+                * self.watermark_config.delta
+            )
+
+            sampled = torch.argmax(
+                curr_logits
+            )  # TODO: we have to support different sampling methods
+            if (
+                self.assumed[pos] != -1
+                and sampled != self.assumed[pos]
+                and self.watermark_config.strategy == "reverse"
+            ):
+                col_tensor = self.bitmap.get_col(next_token.item())
+                next_bias = col_tensor.float() * self.watermark_config.delta
+                next_bias = next_bias.to(curr_logits.device)
+                self.double += 1
+
+        biased_logits = curr_logits + prev_bias + next_bias
         result = torch.argmax(biased_logits)  # TODO: sampling also matters here
-        green_list = self.watermark_config.gen_green_list(prev_token).bool()
-        if green_list[result.item()].item():
-            self.green += 1
         return result
 
     def apply_all(
-        self, logits: torch.Tensor, start_index: int, end_index: int
+        self,
+        x: torch.Tensor,
+        mask_id: int,
+        logits: torch.Tensor,
+        start_index: int,
+        end_index: int,
     ) -> torch.Tensor:
         biased_logits = logits.clone()
-        predicted = logits[:, start_index:end_index].argmax(dim=-1)
+        predicted = logits[:, start_index - 1 : end_index - 1].argmax(dim=-1)
         for i in range(logits.shape[0]):
             bias = (
-                self.bitmap.get_rows(
-                    predicted[i]
-                ).float()
-                * self.watermark_config.delta
-            )
+                (x[i, start_index - 1 : end_index - 1] != mask_id)
+                .float()
+                .reshape(1, -1)
+                @ self.bitmap.get_rows(predicted[i]).float()
+            ).reshape(-1, logits.shape[-1]) * self.watermark_config.delta
             biased_logits[i, start_index:end_index] += bias
         return biased_logits

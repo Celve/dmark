@@ -122,6 +122,8 @@ def generate(
             logits_with_noise = add_gumbel_noise(logits, temperature=temperature)
             if watermark is not None and watermark.watermark_config.prebias:
                 logits_todo = watermark.apply_all(
+                    x,
+                    mask_id,
                     logits_with_noise,
                     prompt.shape[1] + num_block * block_length,
                     prompt.shape[1] + (num_block + 1) * block_length,
@@ -165,6 +167,7 @@ def generate(
                             index - prompt.shape[1],
                             prev_logits,
                             prev_token,
+                            x0[j, index + 1] if index + 1 < x0.shape[1] else None,
                         )
 
                 transfer_index[j, select_index] = True
@@ -174,42 +177,85 @@ def generate(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="LLaDA text generation with optional watermarking")
-    
+    parser = argparse.ArgumentParser(
+        description="LLaDA text generation with optional watermarking"
+    )
+
     # Model arguments
-    parser.add_argument("--model", type=str, default="GSAI-ML/LLaDA-8B-Instruct", help="Model name or path")
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="GSAI-ML/LLaDA-8B-Instruct",
+        help="Model name or path",
+    )
     parser.add_argument("--device", type=str, default="cuda", help="Device to use")
-    
+
     # Dataset arguments
-    parser.add_argument("--dataset", type=str, default="sentence-transformers/eli5", help="Dataset path")
-    parser.add_argument("--num_samples", type=int, default=20, help="Number of samples to process")
-    
+    parser.add_argument(
+        "--dataset", type=str, default="sentence-transformers/eli5", help="Dataset path"
+    )
+    parser.add_argument(
+        "--num_samples", type=int, default=10, help="Number of samples to process"
+    )
+
     # Generation arguments
-    parser.add_argument("--steps", type=int, default=128, help="Number of generation steps")
-    parser.add_argument("--gen_length", type=int, default=256, help="Length of generated text")
-    parser.add_argument("--block_length", type=int, default=32, help="Block length for generation")
-    parser.add_argument("--temperature", type=float, default=0.0, help="Temperature for sampling")
+    parser.add_argument(
+        "--steps", type=int, default=128, help="Number of generation steps"
+    )
+    parser.add_argument(
+        "--gen_length", type=int, default=128, help="Length of generated text"
+    )
+    parser.add_argument(
+        "--block_length", type=int, default=32, help="Block length for generation"
+    )
+    parser.add_argument(
+        "--temperature", type=float, default=0.0, help="Temperature for sampling"
+    )
     parser.add_argument("--cfg_scale", type=float, default=0.0, help="CFG scale")
-    parser.add_argument("--remasking", type=str, default="low_confidence", choices=["low_confidence", "random"], help="Remasking strategy")
-    
+    parser.add_argument(
+        "--remasking",
+        type=str,
+        default="low_confidence",
+        choices=["low_confidence", "random"],
+        help="Remasking strategy",
+    )
+
     # Watermark arguments
-    parser.add_argument("--enable_watermark", action="store_true", help="Enable watermarking")
-    parser.add_argument("--watermark_config", type=str, help="Path to watermark config JSON file")
-    parser.add_argument("--bitmap", type=str, default="../bitmap.bin", help="Path to bitmap file")
-    parser.add_argument("--vocab_size", type=int, default=126464, help="Vocabulary size")
+    parser.add_argument(
+        "--enable_watermark", action="store_true", help="Enable watermarking"
+    )
+    parser.add_argument(
+        "--watermark_config",
+        type=str,
+        help="Path to watermark config JSON file",
+    )
+    parser.add_argument(
+        "--bitmap", type=str, default="../bitmapt.bin", help="Path to bitmap file"
+    )
+    parser.add_argument(
+        "--vocab_size", type=int, default=126464, help="Vocabulary size"
+    )
     parser.add_argument("--ratio", type=float, default=0.5, help="Watermark ratio")
-    parser.add_argument("--delta", type=float, default=3.0, help="Watermark delta")
+    parser.add_argument("--delta", type=float, default=2.0, help="Watermark delta")
     parser.add_argument("--key", type=int, default=42, help="Watermark key")
     parser.add_argument("--prebias", action="store_true", help="Enable prebias")
-    parser.add_argument("--enable_reverse", action="store_true", help="Enable reverse watermarking")
-    
+    parser.add_argument(
+        "--strategy",
+        type=str,
+        default="reverse",
+        choices=["normal", "predict", "reverse"],
+        help="Watermark strategy",
+    )
+
     # Output arguments
-    parser.add_argument("--output_dir", type=str, default=".", help="Output directory for results")
-    
+    parser.add_argument(
+        "--output_dir", type=str, default=".", help="Output directory for results"
+    )
+
     args = parser.parse_args()
-    
+
     device = args.device
-    dataset = load_dataset(args.dataset, split='train')
+    dataset = load_dataset(args.dataset, split="train")
 
     # Load or create watermark config
     if args.watermark_config:
@@ -221,9 +267,9 @@ def main():
             delta=args.delta,
             key=args.key,
             prebias=args.prebias,
-            enable_reverse=args.enable_reverse
+            strategy=args.strategy,
         )
-    
+
     if args.enable_watermark:
         bitmap = PersistentBitmap(watermark_config.vocab_size, args.bitmap)
         watermark = Watermark(watermark_config, bitmap)
@@ -239,15 +285,13 @@ def main():
         .to(device)
         .eval()
     )
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.model, trust_remote_code=True
-    )
+    tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
 
     results = []
 
     for i in tqdm(range(args.num_samples), desc="Processing dataset"):
-        prompt = dataset[i]['question']
-        gt = dataset[i]['answer']
+        prompt = dataset[i]["question"]
+        gt = dataset[i]["answer"]
         m = [
             {"role": "user", "content": prompt},
         ]
@@ -270,37 +314,45 @@ def main():
             watermark=watermark,
         )
 
-        output = tokenizer.batch_decode(out[:, input_ids.shape[1] :], skip_special_tokens=True)[0]
-        z_score = Detector(watermark_config).detect(out[0], input_ids.shape[1]) if args.enable_watermark else None
-        results.append({
-            "prompt": prompt,
-            "ground_truth": gt,
-            "output": output,
-            "z_score": z_score,
-        })
-    
+        output = tokenizer.batch_decode(
+            out[:, input_ids.shape[1] :], skip_special_tokens=True
+        )[0]
+        detect_rate, z_score = Detector(watermark_config).detect(
+            out[0], input_ids.shape[1]
+        )
+        results.append(
+            {
+                "prompt": prompt,
+                "ground_truth": gt,
+                "output": output,
+                "detect_rate": detect_rate,
+                "z_score": z_score,
+            }
+        )
+
     # Generate result filename based on arguments
-    dataset_name = args.dataset.split('/')[-1]
-    model_name = args.model.split('/')[-1]
-    
+    dataset_name = args.dataset.split("/")[-1]
+    model_name = args.model.split("/")[-1]
+
     if args.enable_watermark:
         result_name = f"results_{dataset_name}_{model_name}_wm_r{watermark_config.ratio}_d{watermark_config.delta}_k{watermark_config.key}"
         if watermark_config.prebias:
             result_name += "_prebias"
-        if watermark_config.enable_reverse:
-            result_name += "_reverse"
+        result_name += f"_{watermark_config.strategy}_r{args.remasking}"
     else:
         result_name = f"results_{dataset_name}_{model_name}_no_wm"
-    
+
     result_name += f"_s{args.steps}_l{args.gen_length}_b{args.block_length}_t{args.temperature}_n{args.num_samples}.json"
-    
+
     import os
+
     result_path = os.path.join(args.output_dir, result_name)
 
     with open(result_path, "w") as f:
         json.dump(results, f, indent=4)
-    
+
     print(f"Results saved to: {result_path}")
+
 
 if __name__ == "__main__":
     main()

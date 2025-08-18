@@ -10,6 +10,7 @@ from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer
 
 from dmark.llada.gen_legacy import generate_LLaDA
+from dmark.watermark.legacy import detect
 from dmark.watermark.config import WatermarkConfig
 from dmark.watermark.detect import Detector
 from dmark.watermark.persistent_bitmap import PersistentBitmap
@@ -232,7 +233,7 @@ def main():
         help="Path to watermark config JSON file",
     )
     parser.add_argument(
-        "--bitmap", type=str, default="../bitmapt.bin", help="Path to bitmap file"
+        "--bitmap", type=str, default="bitmapt.bin", help="Path to bitmap file"
     )
     parser.add_argument(
         "--vocab_size", type=int, default=126464, help="Vocabulary size"
@@ -318,7 +319,7 @@ def main():
                 temperature=args.temperature,
                 cfg_scale=args.cfg_scale,
                 remasking=args.remasking,
-                watermark=watermark,
+                watermark_config=watermark.watermark_config,
             )
         else:
             out = generate(
@@ -337,9 +338,17 @@ def main():
             out[:, input_ids.shape[1] :], skip_special_tokens=True
         )[0]
         all = tokenizer.batch_decode(out, skip_special_tokens=True)[0]
-        detect_rate, z_score = Detector(watermark_config).detect(
-            out[0], input_ids.shape[1]
-        )
+        if (
+            watermark_config.strategy == "legacy-ahead"
+            or watermark_config.strategy == "legacy-both"
+        ):
+            detect_rate, z_score = detect(
+                out[0][input_ids.shape[1] - 1 :], watermark_config
+            )
+        else:
+            detect_rate, z_score = Detector(watermark_config).detect(
+                out[0], input_ids.shape[1]
+            )
         ppl = perplexity_eval.evaluate(all)
         results.append(
             {

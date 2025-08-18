@@ -41,6 +41,10 @@ def parse_config_from_filename(filename: str) -> dict:
             config["watermark"] = "normal"
         elif "reverse" in stem:
             config["watermark"] = "reverse"
+        elif "legacy-ahead" in stem:
+            config["watermark"] = "legacy-ahead"
+        elif "legacy-both" in stem:
+            config["watermark"] = "legacy-both"
         else:
             config["watermark"] = "unknown"
     else:

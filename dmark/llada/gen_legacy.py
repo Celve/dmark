@@ -122,7 +122,7 @@ def generate_LLaDA(
             ), "Logits shape mismatch with model vocab size."
 
             start_time = time.time()
-            if watermark_config is not None and watermark_config.enable:
+            if watermark_config is not None:
                 # Apply watermarking logic here if needed
                 assert (
                     watermark_config.strategy == "legacy-ahead"

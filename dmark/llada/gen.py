@@ -336,10 +336,11 @@ def main():
         output = tokenizer.batch_decode(
             out[:, input_ids.shape[1] :], skip_special_tokens=True
         )[0]
+        all = tokenizer.batch_decode(out, skip_special_tokens=True)[0]
         detect_rate, z_score = Detector(watermark_config).detect(
             out[0], input_ids.shape[1]
         )
-        ppl = perplexity_eval.evaluate(output)
+        ppl = perplexity_eval.evaluate(all)
         results.append(
             {
                 "prompt": prompt,

@@ -9,11 +9,12 @@ from datasets import load_dataset
 from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer
 
-from watermark.config import WatermarkConfig
-from watermark.detect import Detector
-from watermark.persistent_bitmap import PersistentBitmap
-from watermark.ppl import PerplexityEval
-from watermark.watermark import Watermark
+from dmark.llada.gen_legacy import generate_LLaDA
+from dmark.watermark.config import WatermarkConfig
+from dmark.watermark.detect import Detector
+from dmark.watermark.persistent_bitmap import PersistentBitmap
+from dmark.watermark.ppl import PerplexityEval
+from dmark.watermark.watermark import Watermark
 
 
 def add_gumbel_noise(logits, temperature):
@@ -244,7 +245,7 @@ def main():
         "--strategy",
         type=str,
         default="reverse",
-        choices=["normal", "predict", "reverse"],
+        choices=["normal", "predict", "reverse", "legacy-ahead", "legacy-both"],
         help="Watermark strategy",
     )
 
@@ -304,17 +305,33 @@ def main():
         input_ids = tokenizer(prompt)["input_ids"]
         input_ids = torch.tensor(input_ids).to(device).unsqueeze(0)
 
-        out = generate(
-            model,
-            input_ids,
-            steps=args.steps,
-            gen_length=args.gen_length,
-            block_length=args.block_length,
-            temperature=args.temperature,
-            cfg_scale=args.cfg_scale,
-            remasking=args.remasking,
-            watermark=watermark,
-        )
+        if (
+            watermark_config.strategy == "legacy-ahead"
+            or watermark_config.strategy == "legacy-both"
+        ):
+            out = generate_LLaDA(
+                model,
+                input_ids,
+                steps=args.steps,
+                gen_length=args.gen_length,
+                block_length=args.block_length,
+                temperature=args.temperature,
+                cfg_scale=args.cfg_scale,
+                remasking=args.remasking,
+                watermark=watermark,
+            )
+        else:
+            out = generate(
+                model,
+                input_ids,
+                steps=args.steps,
+                gen_length=args.gen_length,
+                block_length=args.block_length,
+                temperature=args.temperature,
+                cfg_scale=args.cfg_scale,
+                remasking=args.remasking,
+                watermark=watermark,
+            )
 
         output = tokenizer.batch_decode(
             out[:, input_ids.shape[1] :], skip_special_tokens=True

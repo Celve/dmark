@@ -4,8 +4,8 @@ import time
 import torch
 from tqdm import tqdm
 
-from watermark.config import WatermarkConfig
-from watermark.persistent_bitmap import PersistentBitmap
+from dmark.watermark.config import WatermarkConfig
+from dmark.watermark.persistent_bitmap import PersistentBitmap
 
 
 def preprocess(watermark_config: WatermarkConfig, file_path: str):

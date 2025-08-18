@@ -2,7 +2,7 @@ import math
 
 import torch
 
-from watermark.config import WatermarkConfig
+from dmark.watermark.config import WatermarkConfig
 
 
 class Detector:

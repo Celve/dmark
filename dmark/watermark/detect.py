@@ -15,7 +15,7 @@ class Detector:
         for index in range(prompt_len, tokens.shape[0]):
             prev_token = tokens[index - 1]
             curr_token = tokens[index]
-            if curr_token == 126081:
+            if curr_token == 126081 or curr_token == 126348:
                 break
             green_list = self.config.gen_green_list(prev_token).bool()
             if green_list[curr_token.item()]:

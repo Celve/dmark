@@ -67,10 +67,8 @@ class Watermark:
         predicted = logits[:, start_index - 1 : end_index - 1].argmax(dim=-1)
         for i in range(logits.shape[0]):
             bias = (
-                (x[i, start_index - 1 : end_index - 1] != mask_id)
-                .float()
-                .reshape(1, -1)
-                @ self.bitmap.get_rows(predicted[i]).float()
-            ).reshape(-1, logits.shape[-1]) * self.watermark_config.delta
+                (x[i, start_index - 1 : end_index - 1] != mask_id).unsqueeze(1).float()
+                * self.bitmap.get_rows(predicted[i]).float()
+            ) * self.watermark_config.delta
             biased_logits[i, start_index:end_index] += bias
         return biased_logits

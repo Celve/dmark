@@ -85,7 +85,7 @@ def generate(
         mask_id: The toke id of [MASK] is 126336.
     """
     if watermark is not None:
-        watermark.init(gen_length)
+        watermark.init()
 
     x = torch.full((1, prompt.shape[1] + gen_length), mask_id, dtype=torch.long).to(
         model.device

@@ -19,7 +19,6 @@ def preprocess(watermark_config: WatermarkConfig, file_path: str):
         green_list_ndarray = green_list.numpy()
         persistent_bitmap.set_row(token, green_list_ndarray)
 
-    persistent_bitmap.transpose()
     persistent_bitmap.save()
 
     total_time = time.time() - start_time

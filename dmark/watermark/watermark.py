@@ -10,11 +10,8 @@ class Watermark:
     def __init__(self, watermark_config: WatermarkConfig, bitmap: PersistentBitmap):
         self.watermark_config = watermark_config
         self.bitmap = bitmap
-        self.gen_len = None
 
-    def init(self, gen_len: int):
-        self.gen_len = gen_len
-        self.assumed = torch.ones(gen_len, dtype=torch.int32) * -1
+    def init(self):
         self.double = 0
         self.green = 0
 
@@ -43,20 +40,12 @@ class Watermark:
 
             if prev_token is None:
                 prev_token = prev_logits.argmax(dim=-1)
-                self.assumed[pos - 1] = prev_token
             prev_bias = (
                 self.bitmap.get_row(prev_token.item()).float()
                 * self.watermark_config.delta
             )
 
-            sampled = torch.argmax(
-                curr_logits
-            )  # TODO: we have to support different sampling methods
-            if (
-                self.assumed[pos] != -1
-                and sampled != self.assumed[pos]
-                and self.watermark_config.strategy == "reverse"
-            ):
+            if next_token is not None and self.watermark_config.strategy == "reverse":
                 col_tensor = self.bitmap.get_col(next_token.item())
                 next_bias = col_tensor.float() * self.watermark_config.delta
                 next_bias = next_bias.to(curr_logits.device)

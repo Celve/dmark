@@ -1,9 +1,10 @@
 import argparse
 import json
-from typing import Optional
+import os
+from typing import Any, Optional
 
 import numpy as np
-import torch
+import torch 
 import torch.nn.functional as F
 from datasets import load_dataset
 from tqdm import tqdm
@@ -179,7 +180,8 @@ def generate(
     return x
 
 
-def main():
+def parse_args():
+    """Parse command-line arguments."""
     parser = argparse.ArgumentParser(
         description="LLaDA text generation with optional watermarking"
     )
@@ -225,12 +227,11 @@ def main():
 
     # Watermark arguments
     parser.add_argument(
-        "--enable_watermark", action="store_true", help="Enable watermarking"
-    )
-    parser.add_argument(
-        "--watermark_config",
+        "--strategy",
         type=str,
-        help="Path to watermark config JSON file",
+        default=None,
+        choices=["normal", "predict", "reverse", "legacy-ahead", "legacy-both"],
+        help="Watermark strategy (if provided, watermarking is enabled)",
     )
     parser.add_argument(
         "--bitmap", type=str, default="bitmapt.bin", help="Path to bitmap file"
@@ -242,58 +243,68 @@ def main():
     parser.add_argument("--delta", type=float, default=2.0, help="Watermark delta")
     parser.add_argument("--key", type=int, default=42, help="Watermark key")
     parser.add_argument("--prebias", action="store_true", help="Enable prebias")
-    parser.add_argument(
-        "--strategy",
-        type=str,
-        default="reverse",
-        choices=["normal", "predict", "reverse", "legacy-ahead", "legacy-both"],
-        help="Watermark strategy",
-    )
 
     # Output arguments
     parser.add_argument(
-        "--output_dir", type=str, default=".", help="Output directory for results"
+        "--output_dir", type=str, default=None, help="Output directory for results"
     )
 
     args = parser.parse_args()
+    
+    watermark_config = WatermarkConfig(
+        vocab_size=args.vocab_size,
+        ratio=args.ratio,
+        delta=args.delta,
+        key=args.key,
+        prebias=args.prebias,
+        strategy=args.strategy,
+    )
+    
+    args.watermark_config = watermark_config
+    return args
 
-    device = args.device
-    dataset = load_dataset(args.dataset, split="train")
 
-    # Load or create watermark config
-    if args.watermark_config:
-        watermark_config = WatermarkConfig.from_json(args.watermark_config)
-    else:
-        watermark_config = WatermarkConfig(
-            vocab_size=args.vocab_size,
-            ratio=args.ratio,
-            delta=args.delta,
-            key=args.key,
-            prebias=args.prebias,
-            strategy=args.strategy,
-        )
+def run_generation(
+    model_path: str,
+    device: str,
+    dataset_name: str,
+    num_samples: int,
+    steps: int,
+    gen_length: int,
+    block_length: int,
+    temperature: float,
+    cfg_scale: float,
+    remasking: str,
+    watermark_config: WatermarkConfig,
+    bitmap_path: str,
+    output_dir: Optional[str],
+) -> list[dict[str, Any]]:
+    """Run the generation process with optional watermarking."""
+    # Load dataset
+    dataset = load_dataset(dataset_name, split="train")
 
-    if args.enable_watermark:
-        bitmap = PersistentBitmap(watermark_config.vocab_size, args.bitmap)
+    # Set up watermarking if config is provided
+    if watermark_config.strategy is not None:
+        bitmap = PersistentBitmap(watermark_config.vocab_size, bitmap_path)
         watermark = Watermark(watermark_config, bitmap)
-    else:
-        watermark = None
+        enable_watermark = True
 
+    # Load model
     model = (
         AutoModel.from_pretrained(
-            args.model,
+            model_path,
             trust_remote_code=True,
             torch_dtype=torch.bfloat16,
         )
         .to(device)
         .eval()
     )
-    tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     perplexity_eval = PerplexityEval()
 
     results = []
 
-    for i in tqdm(range(args.num_samples), desc="Processing dataset"):
+    for i in tqdm(range(num_samples), desc="Processing dataset"):
         prompt = dataset[i]["question"]
         gt = dataset[i]["answer"]
         m = [
@@ -313,24 +324,24 @@ def main():
             out = generate_LLaDA(
                 model,
                 input_ids,
-                steps=args.steps,
-                gen_length=args.gen_length,
-                block_length=args.block_length,
-                temperature=args.temperature,
-                cfg_scale=args.cfg_scale,
-                remasking=args.remasking,
-                watermark_config=watermark.watermark_config,
+                steps=steps,
+                gen_length=gen_length,
+                block_length=block_length,
+                temperature=temperature,
+                cfg_scale=cfg_scale,
+                remasking=remasking,
+                watermark_config=watermark.watermark_config if watermark else None,
             )
         else:
             out = generate(
                 model,
                 input_ids,
-                steps=args.steps,
-                gen_length=args.gen_length,
-                block_length=args.block_length,
-                temperature=args.temperature,
-                cfg_scale=args.cfg_scale,
-                remasking=args.remasking,
+                steps=steps,
+                gen_length=gen_length,
+                block_length=block_length,
+                temperature=temperature,
+                cfg_scale=cfg_scale,
+                remasking=remasking,
                 watermark=watermark,
             )
 
@@ -338,15 +349,17 @@ def main():
             out[:, input_ids.shape[1] :], skip_special_tokens=True
         )[0]
         all = tokenizer.batch_decode(out, skip_special_tokens=True)[0]
+        
+        detector_config = watermark_config
         if (
-            watermark_config.strategy == "legacy-ahead"
-            or watermark_config.strategy == "legacy-both"
+            detector_config.strategy == "legacy-ahead"
+            or detector_config.strategy == "legacy-both"
         ):
             detect_rate, z_score = detect(
-                out[0][input_ids.shape[1] - 1 :], watermark_config
+                out[0][input_ids.shape[1] - 1 :], detector_config
             )
         else:
-            detect_rate, z_score = Detector(watermark_config).detect(
+            detect_rate, z_score = Detector(detector_config).detect(
                 out[0], input_ids.shape[1]
             )
         ppl = perplexity_eval.evaluate(all)
@@ -358,31 +371,72 @@ def main():
                 "detect_rate": detect_rate,
                 "z_score": z_score,
                 "ppl": ppl,
+                "generation_metadata": {
+                    "model": model_path,
+                    "dataset": dataset_name,
+                    "steps": steps,
+                    "gen_length": gen_length,
+                    "block_length": block_length,
+                    "temperature": temperature,
+                    "cfg_scale": cfg_scale,
+                    "remasking": remasking,
+                    "device": device,
+                },
+                "watermark_metadata": {
+                    "strategy": watermark_config.strategy,
+                    "vocab_size": watermark_config.vocab_size,
+                    "ratio": watermark_config.ratio,
+                    "delta": watermark_config.delta,
+                    "key": watermark_config.key,
+                    "prebias": watermark_config.prebias,
+                } if enable_watermark else None,
             }
         )
 
     # Generate result filename based on arguments
-    dataset_name = args.dataset.split("/")[-1]
-    model_name = args.model.split("/")[-1]
+    dataset_short_name = dataset_name.split("/")[-1]
+    model_short_name = model_path.split("/")[-1]
 
-    if args.enable_watermark:
-        result_name = f"results_{dataset_name}_{model_name}_wm_r{watermark_config.ratio}_d{watermark_config.delta}_k{watermark_config.key}"
-        if watermark_config.prebias:
-            result_name += "_prebias"
-        result_name += f"_{watermark_config.strategy}_r{args.remasking}"
-    else:
-        result_name = f"results_{dataset_name}_{model_name}_no_wm"
+    if output_dir is not None:
+        if enable_watermark:
+            result_name = f"results_{dataset_short_name}_{model_short_name}_wm_r{watermark_config.ratio}_d{watermark_config.delta}_k{watermark_config.key}"
+            if watermark_config.prebias:
+                result_name += "_prebias"
+            result_name += f"_{watermark_config.strategy}_r{remasking}"
+        else:
+            result_name = f"results_{dataset_short_name}_{model_short_name}_no_wm"
 
-    result_name += f"_s{args.steps}_l{args.gen_length}_b{args.block_length}_t{args.temperature}_n{args.num_samples}.json"
+        result_name += f"_s{steps}_l{gen_length}_b{block_length}_t{temperature}_n{num_samples}.json"
 
-    import os
+        result_path = os.path.join(output_dir, result_name)
 
-    result_path = os.path.join(args.output_dir, result_name)
+        with open(result_path, "w") as f:
+            json.dump(results, f, indent=4)
 
-    with open(result_path, "w") as f:
-        json.dump(results, f, indent=4)
+        print(f"Results saved to: {result_path}")
+    
+    return results
 
-    print(f"Results saved to: {result_path}")
+
+def main():
+    """Main entry point for the script."""
+    args = parse_args()
+    
+    run_generation(
+        model_path=args.model,
+        device=args.device,
+        dataset_name=args.dataset,
+        num_samples=args.num_samples,
+        steps=args.steps,
+        gen_length=args.gen_length,
+        block_length=args.block_length,
+        temperature=args.temperature,
+        cfg_scale=args.cfg_scale,
+        remasking=args.remasking,
+        watermark_config=args.watermark_config,
+        bitmap_path=args.bitmap,
+        output_dir=args.output_dir,
+    )
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 import json
+from typing import Optional
 
 import torch
 
@@ -11,7 +12,7 @@ class WatermarkConfig:
         delta: float,
         key: int,
         prebias: bool = False,
-        strategy: str = "reverse",
+        strategy: Optional[str] = None,
     ):
         self.vocab_size = vocab_size
         self.ratio = ratio

@@ -2,11 +2,15 @@ from typing import Any
 from dmark.llada.gen import run_generation, parse_args
 import os
 import numpy as np
+import argparse
 
 from dmark.watermark.config import WatermarkConfig
 
-def run_acc() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    args = parse_args()
+def run_acc(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    no_watermarked_output_dir = os.path.join(args.output_dir, "no_watermark")
+    watermarked_output_dir = os.path.join(args.output_dir, "watermarked")
+    os.makedirs(no_watermarked_output_dir, exist_ok=True)
+    os.makedirs(watermarked_output_dir, exist_ok=True)
 
     no_watermark_config = WatermarkConfig(
         vocab_size=args.watermark_config.vocab_size,
@@ -31,7 +35,7 @@ def run_acc() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         remasking=args.remasking,
         watermark_config=no_watermark_config,
         bitmap_path=args.bitmap,
-        output_dir=None,
+        output_dir=no_watermarked_output_dir,
     )
 
     # we then run the watermarked generation
@@ -48,7 +52,7 @@ def run_acc() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         remasking=args.remasking,
         watermark_config=args.watermark_config,
         bitmap_path=args.bitmap,
-        output_dir=None,
+        output_dir=watermarked_output_dir,
     )
     
     return non_watermarked_results, watermarked_results
@@ -134,13 +138,21 @@ def calc_acc(non_watermarked_results: list[dict[str, Any]], watermarked_results:
     print(f"  Std: {results['statistics']['wm_z_scores']['std']:.3f}")
     print(f"  Median: {results['statistics']['wm_z_scores']['median']:.3f}")
     print(f"  Range: [{results['statistics']['wm_z_scores']['min']:.3f}, {results['statistics']['wm_z_scores']['max']:.3f}]")
-    
+
+    # INSERT_YOUR_CODE
+    # Dump results to acc.json
+    with open("acc.json", "w") as f:
+        import json
+        json.dump(results, f, indent=4)
+    print("Results saved to acc.json")
+
     return results
 
 
 def main():
     """Main entry point for accuracy evaluation."""
-    non_wm_results, wm_results = run_acc()
+    args = parse_args()
+    non_wm_results, wm_results = run_acc(args)
     calc_acc(non_wm_results, wm_results)
 
 

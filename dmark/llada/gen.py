@@ -288,6 +288,9 @@ def run_generation(
         bitmap = PersistentBitmap(watermark_config.vocab_size, bitmap_path)
         watermark = Watermark(watermark_config, bitmap)
         enable_watermark = True
+    else: 
+        watermark = None
+        enable_watermark = False
 
     # Load model
     model = (

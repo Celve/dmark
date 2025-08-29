@@ -3,8 +3,19 @@ from dmark.llada.gen import run_generation, parse_args
 import os
 import numpy as np
 
+from dmark.watermark.config import WatermarkConfig
+
 def run_acc() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     args = parse_args()
+
+    no_watermark_config = WatermarkConfig(
+        vocab_size=args.watermark_config.vocab_size,
+        ratio=args.watermark_config.ratio,
+        delta=args.watermark_config.delta,
+        key=args.watermark_config.key,
+        prebias=args.watermark_config.prebias,
+        strategy=None,
+    )
 
     # we run the no-watermarked generation first
     non_watermarked_results = run_generation(
@@ -18,7 +29,7 @@ def run_acc() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         temperature=args.temperature,
         cfg_scale=args.cfg_scale,
         remasking=args.remasking,
-        watermark_config=None,
+        watermark_config=no_watermark_config,
         bitmap_path=args.bitmap,
         output_dir=None,
     )
@@ -58,7 +69,8 @@ def calc_acc(non_watermarked_results: list[dict[str, Any]], watermarked_results:
         sorted_non_wm = np.sort(non_wm_z_scores)[::-1]
         
         # Find threshold index based on target FPR
-        threshold_idx = int(np.ceil(len(sorted_non_wm) * target_fpr))
+        threshold_idx = int(np.floor(len(sorted_non_wm) * target_fpr))
+        print(threshold_idx, len(sorted_non_wm), target_fpr)
         if threshold_idx >= len(sorted_non_wm):
             threshold_idx = len(sorted_non_wm) - 1
         
@@ -66,8 +78,8 @@ def calc_acc(non_watermarked_results: list[dict[str, Any]], watermarked_results:
         z_threshold = sorted_non_wm[threshold_idx] if threshold_idx < len(sorted_non_wm) else sorted_non_wm[-1]
         
         # Calculate actual FPR and TPR at this threshold
-        actual_fpr = np.mean(non_wm_z_scores >= z_threshold)
-        tpr = np.mean(wm_z_scores >= z_threshold)  # True Positive Rate (detection rate)
+        actual_fpr = np.mean(non_wm_z_scores > z_threshold)
+        tpr = np.mean(wm_z_scores > z_threshold)  # True Positive Rate (detection rate)
         
         results[f"fpr_{target_fpr}"] = {
             "target_fpr": target_fpr,

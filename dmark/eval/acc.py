@@ -7,10 +7,8 @@ import argparse
 from dmark.watermark.config import WatermarkConfig
 
 def run_acc(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    no_watermarked_output_dir = os.path.join(args.output_dir, "no_watermark")
-    watermarked_output_dir = os.path.join(args.output_dir, "watermarked")
-    os.makedirs(no_watermarked_output_dir, exist_ok=True)
-    os.makedirs(watermarked_output_dir, exist_ok=True)
+    if args.output_dir is not None:
+        os.makedirs(args.output_dir, exist_ok=True)
 
     no_watermark_config = WatermarkConfig(
         vocab_size=args.watermark_config.vocab_size,
@@ -35,7 +33,8 @@ def run_acc(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[dict[s
         remasking=args.remasking,
         watermark_config=no_watermark_config,
         bitmap_path=args.bitmap,
-        output_dir=no_watermarked_output_dir,
+        output_dir=args.output_dir,
+        enable_ppl=args.ppl,
     )
 
     # we then run the watermarked generation
@@ -52,12 +51,13 @@ def run_acc(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[dict[s
         remasking=args.remasking,
         watermark_config=args.watermark_config,
         bitmap_path=args.bitmap,
-        output_dir=watermarked_output_dir,
+        output_dir=args.output_dir,
+        enable_ppl=args.ppl,
     )
     
     return non_watermarked_results, watermarked_results
 
-def calc_acc(non_watermarked_results: list[dict[str, Any]], watermarked_results: list[dict[str, Any]]) -> dict[str, Any]:
+def calc_acc(args: argparse.Namespace, non_watermarked_results: list[dict[str, Any]], watermarked_results: list[dict[str, Any]]) -> dict[str, Any]:
     """Calculate accuracy metrics and z-score thresholds for specified false positive rates."""
     low_false_positive_rates = [0.001, 0.005, 0.01, 0.05]
     
@@ -141,10 +141,11 @@ def calc_acc(non_watermarked_results: list[dict[str, Any]], watermarked_results:
 
     # INSERT_YOUR_CODE
     # Dump results to acc.json
-    with open("acc.json", "w") as f:
-        import json
-        json.dump(results, f, indent=4)
-    print("Results saved to acc.json")
+    if args.output_dir is not None:
+        with open(f"{args.output_dir}/acc.json", "w") as f:
+            import json
+            json.dump(results, f, indent=4)
+        print(f"Results saved to {args.output_dir}/acc.json")
 
     return results
 
@@ -153,7 +154,7 @@ def main():
     """Main entry point for accuracy evaluation."""
     args = parse_args()
     non_wm_results, wm_results = run_acc(args)
-    calc_acc(non_wm_results, wm_results)
+    calc_acc(args, non_wm_results, wm_results)
 
 
 if __name__ == "__main__":

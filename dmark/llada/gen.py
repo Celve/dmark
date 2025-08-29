@@ -243,6 +243,7 @@ def parse_args():
     parser.add_argument("--delta", type=float, default=2.0, help="Watermark delta")
     parser.add_argument("--key", type=int, default=42, help="Watermark key")
     parser.add_argument("--prebias", action="store_true", help="Enable prebias")
+    parser.add_argument("--ppl", action="store_true", help="Enable perplexity evaluation")
 
     # Output arguments
     parser.add_argument(
@@ -278,6 +279,7 @@ def run_generation(
     watermark_config: WatermarkConfig,
     bitmap_path: str,
     output_dir: Optional[str],
+    enable_ppl: bool,
 ) -> list[dict[str, Any]]:
     """Run the generation process with optional watermarking."""
     # Load dataset
@@ -303,7 +305,7 @@ def run_generation(
         .eval()
     )
     tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
-    perplexity_eval = PerplexityEval()
+    perplexity_eval = PerplexityEval() if enable_ppl else None
 
     results = []
 
@@ -365,7 +367,10 @@ def run_generation(
             detect_rate, z_score = Detector(detector_config).detect(
                 out[0], input_ids.shape[1]
             )
-        ppl = perplexity_eval.evaluate(all)
+        if enable_ppl:
+            ppl = perplexity_eval.evaluate(all)
+        else:
+            ppl = None
         results.append(
             {
                 "prompt": prompt,
@@ -439,6 +444,7 @@ def main():
         watermark_config=args.watermark_config,
         bitmap_path=args.bitmap,
         output_dir=args.output_dir,
+        enable_ppl=args.ppl,
     )
 
 

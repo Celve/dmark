@@ -31,6 +31,7 @@ class GenConfig(BaseModel):
 class ExprConfig(BaseModel):
     num_samples: int
     output_dir: Optional[str]
+    minimum_output_token: Optional[int]
 
 def parse_args(): 
     parser = argparse.ArgumentParser()
@@ -46,6 +47,7 @@ def parse_args():
 
     # then we add number of samples and output directory
     parser.add_argument("--num_samples", type=int, default=100)
+    parser.add_argument("--minimum_output_token", type=int, default=None)
     parser.add_argument("--output_dir", type=str, default=None)
 
     # then we add generation arguments
@@ -92,6 +94,7 @@ def parse_args():
     expr_config = ExprConfig(
         num_samples=args.num_samples,
         output_dir=args.output_dir,
+        minimum_output_token=args.minimum_output_token,
     )
 
     return gen_config, watermark_config, expr_config
@@ -148,6 +151,10 @@ def generate_result_filename(
     # Add number of samples
     components.append(f"n{expr_config.num_samples}")
     
+    # Add minimum output token if specified
+    if expr_config.minimum_output_token is not None:
+        components.append(f"min{expr_config.minimum_output_token}")
+    
     # Add timestamp for uniqueness
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     components.append(timestamp)
@@ -187,10 +194,12 @@ def run_generation(
     tokenizer = AutoTokenizer.from_pretrained(gen_config.model, trust_remote_code=True)
 
     results = []
-
-    for i in tqdm(range(expr_config.num_samples), desc="Processing dataset"):
-        prompt = dataset[i]["question"]
-        gt = dataset[i]["answer"]
+    dataset_idx = 0
+    pbar = tqdm.tqdm(total=expr_config.num_samples, desc="Collecting valid samples")
+    
+    while len(results) < expr_config.num_samples and dataset_idx < len(dataset):
+        prompt = dataset[dataset_idx]["question"]
+        gt = dataset[dataset_idx]["answer"]
         m = [
             {"role": "user", "content": prompt},
         ]
@@ -229,23 +238,39 @@ def run_generation(
                 watermark=watermark,
             )
 
+        output_ids = out[:, input_ids.shape[1] :][0]
         output = tokenizer.batch_decode(
             out[:, input_ids.shape[1] :], skip_special_tokens=True
         )[0]
         
-        results.append(
-            {
-                "data": 
+        # Check if output meets minimum token requirement
+        num_output_tokens = output_ids.shape[0]
+        if expr_config.minimum_output_token is None or num_output_tokens >= expr_config.minimum_output_token:
+            results.append(
                 {
-                    "prompt": prompt,
-                    "ground_truth": gt,
-                    "output": output,
-                    "output_ids": out[:, input_ids.shape[1] :][0].tolist(),
-                },
-                "generation_metadata": gen_config.model_dump(),
-                "watermark_metadata": watermark_config.model_dump() if watermark_config.strategy is not None else None,
-            }
-        )
+                    "data": 
+                    {
+                        "prompt": prompt,
+                        "ground_truth": gt,
+                        "output": output,
+                        "output_ids": output_ids.tolist(),
+                        "num_output_tokens": num_output_tokens,
+                    },
+                    "generation_metadata": gen_config.model_dump(),
+                    "watermark_metadata": watermark_config.model_dump() if watermark_config.strategy is not None else None,
+                }
+            )
+            pbar.update(1)
+        else:
+            pbar.set_postfix({"skipped": f"{num_output_tokens} < {expr_config.minimum_output_token}"})
+        
+        dataset_idx += 1
+    
+    pbar.close()
+    
+    if len(results) < expr_config.num_samples:
+        print(f"Warning: Only collected {len(results)} valid samples out of {expr_config.num_samples} requested.")
+        print(f"Dataset exhausted at index {dataset_idx}.")
 
     return results
 

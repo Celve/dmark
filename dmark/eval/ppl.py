@@ -41,7 +41,7 @@ class PPLCalculator:
 def process_json_file(
     input_file: str,
     output_file: str,
-    model_name: str = "GSAI-ML/LLaDA-8B-Instruct",
+    model_name: str = "meta-llama/Meta-Llama-3-8B-Instruct",
     device: str = "cuda"
 ) -> None:
     """Process a JSON file containing generation results and add perplexity scores.
@@ -63,11 +63,12 @@ def process_json_file(
     
     # Initialize model and tokenizer
     print(f"Loading model: {model_name}")
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-        device_map="auto" if device == "cuda" else None
+        device_map="auto" if device == "cuda" else None,
+        trust_remote_code=True,
     ).to(device)
     model.eval()
     
@@ -76,21 +77,11 @@ def process_json_file(
     
     # Process each result
     for result in tqdm(results, desc="Calculating perplexity"):
-        # Get output IDs
-        output_ids = result["data"]["output_ids"]
-        
-        # Skip special tokens (EOS tokens) in output
-        filtered_output = []
-        for token in output_ids:
-            if token == 126081 or token == 126348:
-                break
-            filtered_output.append(token)
-        
-        # Calculate perplexity
-        if filtered_output and len(filtered_output) >= 2:
-            perplexity = ppl_calculator.analyze_tokens(filtered_output)
-        else:
-            perplexity = None
+        prompt = result["data"]["prompt"]
+        output = result["data"]["output"]
+        full_text = prompt + output
+        full_ids = tokenizer(full_text, add_special_tokens=False).input_ids
+        perplexity = ppl_calculator.analyze_tokens(full_ids)
         
         # Add perplexity to result
         result["perplexity"] = perplexity
@@ -127,8 +118,8 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default="GSAI-ML/LLaDA-8B-Instruct",
-        help="Model name for perplexity calculation (default: GSAI-ML/LLaDA-8B-Instruct)"
+        default="meta-llama/Meta-Llama-3-8B-Instruct",
+        help="Model name for perplexity calculation (default: meta-llama/Meta-Llama-3-8B-Instruct)"
     )
     parser.add_argument(
         "--device",

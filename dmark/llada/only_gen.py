@@ -239,9 +239,20 @@ def run_generation(
             )
 
         output_ids = out[:, input_ids.shape[1] :][0]
-        output = tokenizer.batch_decode(
-            out[:, input_ids.shape[1] :], skip_special_tokens=True
-        )[0]
+        
+        # Trim output_ids at first occurrence of special tokens (126081 or 126348)
+        trimmed_length = len(output_ids)
+        for i, curr_token in enumerate(output_ids):
+            if curr_token == 126081 or curr_token == 126348:
+                trimmed_length = i
+                break
+        output_ids = output_ids[:trimmed_length]
+        
+        # Decode the trimmed output_ids
+        if trimmed_length > 0:
+            output = tokenizer.decode(output_ids, skip_special_tokens=True)
+        else:
+            output = ""
         
         # Check if output meets minimum token requirement
         num_output_tokens = output_ids.shape[0]

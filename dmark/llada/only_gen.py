@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from typing import Any, Optional
 
 import torch
-import tqdm
+from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer
 from datasets import load_dataset
 

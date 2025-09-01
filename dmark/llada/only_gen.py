@@ -96,6 +96,67 @@ def parse_args():
     return gen_config, watermark_config, expr_config
 
 
+def generate_result_filename(
+    gen_config: GenConfig,
+    watermark_config: WatermarkConfig,
+    expr_config: ExprConfig,
+) -> str:
+    """Generate a comprehensive result filename based on all configuration parameters."""
+    import datetime
+    
+    # Extract model name (last part after /)
+    model_name = gen_config.model.split('/')[-1]
+    
+    # Start with base components
+    components = [
+        "results",
+        gen_config.dataset.replace('/', '_'),
+        model_name,
+    ]
+    
+    # Add generation parameters
+    components.extend([
+        f"steps{gen_config.steps}",
+        f"len{gen_config.gen_length}",
+        f"blk{gen_config.block_length}",
+        f"temp{gen_config.temperature}",
+        f"cfg{gen_config.cfg_scale}",
+        f"mask_{gen_config.remasking}",
+    ])
+    
+    # Add watermark parameters if enabled
+    if watermark_config.strategy is not None:
+        components.append("wm")
+        components.extend([
+            f"r{watermark_config.ratio}",
+            f"d{watermark_config.delta}",
+            f"k{watermark_config.key}",
+            watermark_config.strategy,
+        ])
+        
+        # Add prebias if enabled
+        if watermark_config.prebias:
+            components.append("prebias")
+        
+        # Add vocab size if not default
+        if watermark_config.vocab_size != 126464:
+            components.append(f"v{watermark_config.vocab_size}")
+    else:
+        components.append("nowm")
+    
+    # Add number of samples
+    components.append(f"n{expr_config.num_samples}")
+    
+    # Add timestamp for uniqueness
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    components.append(timestamp)
+    
+    # Join with underscores and add extension
+    filename = "-".join(components) + ".json"
+    
+    return filename
+
+
 def run_generation(
     gen_config: GenConfig,
     watermark_config: WatermarkConfig,
@@ -107,7 +168,7 @@ def run_generation(
 
     # Set up watermarking if config is provided
     if watermark_config.strategy is not None:
-        bitmap = PersistentBitmap(watermark_config.vocab_size, gen_config.bitmap)
+        bitmap = PersistentBitmap(watermark_config.vocab_size, watermark_config.bitmap if hasattr(watermark_config, 'bitmap') else "bitmap.bin")
         watermark = Watermark(watermark_config, bitmap)
     else: 
         watermark = None
@@ -190,8 +251,14 @@ def run_generation(
 if __name__ == "__main__":
     gen_config, watermark_config, expr_config = parse_args()
     results = run_generation(gen_config, watermark_config, expr_config)
-    if expr_config.output_dir is not None:
-        with open(expr_config.output_dir, "w") as f:
-            json.dump(results, f, indent=4)
+    
+    # Generate filename if not provided
+    if expr_config.output_dir is None:
+        output_filename = generate_result_filename(gen_config, watermark_config, expr_config)
     else:
-        print(results)
+        output_filename = expr_config.output_dir
+    
+    # Save results to file
+    with open(output_filename, "w") as f:
+        json.dump(results, f, indent=4)
+    print(f"Results saved to: {output_filename}")

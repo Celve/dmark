@@ -197,85 +197,91 @@ def run_generation(
     dataset_idx = 0
     pbar = tqdm.tqdm(total=expr_config.num_samples, desc="Collecting valid samples")
     
-    while len(results) < expr_config.num_samples and dataset_idx < len(dataset):
-        prompt = dataset[dataset_idx]["question"]
-        gt = dataset[dataset_idx]["answer"]
-        m = [
-            {"role": "user", "content": prompt},
-        ]
-        prompt = tokenizer.apply_chat_template(
-            m, add_generation_prompt=True, tokenize=False
-        )
-
-        input_ids = tokenizer(prompt)["input_ids"]
-        input_ids = torch.tensor(input_ids).to(device).unsqueeze(0)
-
-        if (
-            watermark_config.strategy == "legacy-ahead"
-            or watermark_config.strategy == "legacy-both"
-        ):
-            out = generate_LLaDA(
-                model,
-                input_ids,
-                steps=gen_config.steps,
-                gen_length=gen_config.gen_length,
-                block_length=gen_config.block_length,
-                temperature=gen_config.temperature,
-                cfg_scale=gen_config.cfg_scale,
-                remasking=gen_config.remasking,
-                watermark_config=watermark.watermark_config if watermark else None,
-            )
-        else:
-            out = generate(
-                model,
-                input_ids,
-                steps=gen_config.steps,
-                gen_length=gen_config.gen_length,
-                block_length=gen_config.block_length,
-                temperature=gen_config.temperature,
-                cfg_scale=gen_config.cfg_scale,
-                remasking=gen_config.remasking,
-                watermark=watermark,
+    try:
+        while len(results) < expr_config.num_samples and dataset_idx < len(dataset):
+            prompt = dataset[dataset_idx]["question"]
+            gt = dataset[dataset_idx]["answer"]
+            m = [
+                {"role": "user", "content": prompt},
+            ]
+            prompt = tokenizer.apply_chat_template(
+                m, add_generation_prompt=True, tokenize=False
             )
 
-        output_ids = out[:, input_ids.shape[1] :][0]
-        
-        # Trim output_ids at first occurrence of special tokens (126081 or 126348)
-        trimmed_length = len(output_ids)
-        for i, curr_token in enumerate(output_ids):
-            if curr_token == 126081 or curr_token == 126348:
-                trimmed_length = i
-                break
-        output_ids = output_ids[:trimmed_length]
-        
-        # Decode the trimmed output_ids
-        if trimmed_length > 0:
-            output = tokenizer.decode(output_ids, skip_special_tokens=True)
-        else:
-            output = ""
-        
-        # Check if output meets minimum token requirement
-        num_output_tokens = output_ids.shape[0]
-        if expr_config.minimum_output_token is None or num_output_tokens >= expr_config.minimum_output_token:
-            results.append(
-                {
-                    "data": 
+            input_ids = tokenizer(prompt)["input_ids"]
+            input_ids = torch.tensor(input_ids).to(device).unsqueeze(0)
+
+            if (
+                watermark_config.strategy == "legacy-ahead"
+                or watermark_config.strategy == "legacy-both"
+            ):
+                out = generate_LLaDA(
+                    model,
+                    input_ids,
+                    steps=gen_config.steps,
+                    gen_length=gen_config.gen_length,
+                    block_length=gen_config.block_length,
+                    temperature=gen_config.temperature,
+                    cfg_scale=gen_config.cfg_scale,
+                    remasking=gen_config.remasking,
+                    watermark_config=watermark.watermark_config if watermark else None,
+                )
+            else:
+                out = generate(
+                    model,
+                    input_ids,
+                    steps=gen_config.steps,
+                    gen_length=gen_config.gen_length,
+                    block_length=gen_config.block_length,
+                    temperature=gen_config.temperature,
+                    cfg_scale=gen_config.cfg_scale,
+                    remasking=gen_config.remasking,
+                    watermark=watermark,
+                )
+
+            output_ids = out[:, input_ids.shape[1] :][0]
+            
+            # Trim output_ids at first occurrence of special tokens (126081 or 126348)
+            trimmed_length = len(output_ids)
+            for i, curr_token in enumerate(output_ids):
+                if curr_token == 126081 or curr_token == 126348:
+                    trimmed_length = i
+                    break
+            output_ids = output_ids[:trimmed_length]
+            
+            # Decode the trimmed output_ids
+            if trimmed_length > 0:
+                output = tokenizer.decode(output_ids, skip_special_tokens=True)
+            else:
+                output = ""
+            
+            # Check if output meets minimum token requirement
+            num_output_tokens = output_ids.shape[0]
+            if expr_config.minimum_output_token is None or num_output_tokens >= expr_config.minimum_output_token:
+                results.append(
                     {
-                        "prompt": prompt,
-                        "ground_truth": gt,
-                        "output": output,
-                        "output_ids": output_ids.tolist(),
-                        "num_output_tokens": num_output_tokens,
-                    },
-                    "generation_metadata": gen_config.model_dump(),
-                    "watermark_metadata": watermark_config.model_dump() if watermark_config.strategy is not None else None,
-                }
-            )
-            pbar.update(1)
-        else:
-            pbar.set_postfix({"skipped": f"{num_output_tokens} < {expr_config.minimum_output_token}"})
-        
-        dataset_idx += 1
+                        "data": 
+                        {
+                            "prompt": prompt,
+                            "ground_truth": gt,
+                            "output": output,
+                            "output_ids": output_ids.tolist(),
+                            "num_output_tokens": num_output_tokens,
+                        },
+                        "generation_metadata": gen_config.model_dump(),
+                        "watermark_metadata": watermark_config.model_dump() if watermark_config.strategy is not None else None,
+                    }
+                )
+                pbar.update(1)
+            else:
+                pbar.set_postfix({"skipped": f"{num_output_tokens} < {expr_config.minimum_output_token}"})
+            
+            dataset_idx += 1
+    
+    except KeyboardInterrupt:
+        print(f"\n\nInterrupted! Collected {len(results)} samples so far.")
+        pbar.close()
+        return results
     
     pbar.close()
     
@@ -289,14 +295,18 @@ if __name__ == "__main__":
     gen_config, watermark_config, expr_config = parse_args()
     results = run_generation(gen_config, watermark_config, expr_config)
     
-    # Generate filename if not provided
-    if expr_config.output_dir is not None:
-        os.makedirs(expr_config.output_dir, exist_ok=True)
-        output_filename = generate_result_filename(gen_config, watermark_config, expr_config)
-        output_filename = os.path.join(expr_config.output_dir, output_filename)
-        # Save results to file
-        with open(output_filename, "w") as f:
-            json.dump(results, f, indent=4)
-        print(f"Results saved to: {output_filename}")
-    else: 
-        print(results)
+    # Save results if any were collected
+    if results:
+        if expr_config.output_dir is not None:
+            os.makedirs(expr_config.output_dir, exist_ok=True)
+            output_filename = generate_result_filename(gen_config, watermark_config, expr_config)
+            output_filename = os.path.join(expr_config.output_dir, output_filename)
+            # Save results to file
+            with open(output_filename, "w") as f:
+                json.dump(results, f, indent=4)
+            print(f"Results saved to: {output_filename}")
+            print(f"Total samples collected: {len(results)}")
+        else: 
+            print(results)
+    else:
+        print("No results were collected.")

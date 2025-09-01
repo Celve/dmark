@@ -3,7 +3,9 @@ import json
 import math
 import os
 from typing import List
+from tqdm import tqdm
 
+from dmark.watermark.persistent_bitmap import PersistentBitmap
 from transformers import AutoTokenizer
 
 from dmark.watermark.config import WatermarkConfig
@@ -55,7 +57,7 @@ def calculate_zscore(
         return 0.0, 0.0
     
     detection_rate = detected / gen_len
-    z_score = 2 * (detected - gen_len * watermark.config.ratio) / math.sqrt(gen_len)
+    z_score = 2 * (detected - gen_len * watermark.watermark_config.ratio) / math.sqrt(gen_len)
     
     return detection_rate, z_score
 
@@ -79,29 +81,25 @@ def process_json_file(
         results = json.load(f)
     
     # Initialize tokenizer
+    if results[0].get("watermark_metadata") is None:
+        return 
+    
+    # Extract watermark configuration
+    wm_meta = results[0]["watermark_metadata"]
+    watermark_config = WatermarkConfig(
+        vocab_size=wm_meta.get("vocab_size", 126464),
+        ratio=wm_meta.get("ratio", 0.5),
+        delta=wm_meta.get("delta", 2.0),
+        key=wm_meta.get("key", 42),
+        prebias=wm_meta.get("prebias", False),
+        strategy=wm_meta.get("strategy", "normal")
+    )
     tokenizer = AutoTokenizer.from_pretrained(model_name)
+    bitmap = PersistentBitmap(watermark_config.vocab_size, bitmap_file)
+    watermark = Watermark(watermark_config, bitmap)
     
     # Process each result
-    for result in results:
-        # Skip if no watermark metadata
-        if result.get("watermark_metadata") is None:
-            result["watermark"] = None
-            continue
-        
-        # Extract watermark configuration
-        wm_meta = result["watermark_metadata"]
-        watermark_config = WatermarkConfig(
-            vocab_size=wm_meta.get("vocab_size", 126464),
-            ratio=wm_meta.get("ratio", 0.5),
-            delta=wm_meta.get("delta", 2.0),
-            key=wm_meta.get("key", 42),
-            prebias=wm_meta.get("prebias", False),
-            strategy=wm_meta.get("strategy", "normal")
-        )
-        
-        # Create Watermark instance with bitmap for efficient green list generation
-        watermark = Watermark(watermark_config, bitmap_file)
-        
+    for result in tqdm(results, desc="Processing results"):
         # Get output IDs
         output_ids = result["data"]["output_ids"]
         

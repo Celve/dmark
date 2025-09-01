@@ -282,6 +282,7 @@ if __name__ == "__main__":
     if expr_config.output_dir is not None:
         os.makedirs(expr_config.output_dir, exist_ok=True)
         output_filename = generate_result_filename(gen_config, watermark_config, expr_config)
+        output_filename = os.path.join(expr_config.output_dir, output_filename)
         # Save results to file
         with open(output_filename, "w") as f:
             json.dump(results, f, indent=4)

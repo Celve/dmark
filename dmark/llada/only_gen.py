@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 
 from pydantic import BaseModel
 from typing import Any, Optional
@@ -253,12 +254,12 @@ if __name__ == "__main__":
     results = run_generation(gen_config, watermark_config, expr_config)
     
     # Generate filename if not provided
-    if expr_config.output_dir is None:
+    if expr_config.output_dir is not None:
+        os.makedirs(expr_config.output_dir, exist_ok=True)
         output_filename = generate_result_filename(gen_config, watermark_config, expr_config)
-    else:
-        output_filename = expr_config.output_dir
-    
-    # Save results to file
-    with open(output_filename, "w") as f:
-        json.dump(results, f, indent=4)
-    print(f"Results saved to: {output_filename}")
+        # Save results to file
+        with open(output_filename, "w") as f:
+            json.dump(results, f, indent=4)
+        print(f"Results saved to: {output_filename}")
+    else: 
+        print(results)

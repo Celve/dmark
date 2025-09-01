@@ -14,6 +14,13 @@ class Watermark:
     def init(self):
         self.double = 0
         self.green = 0
+    
+    def gen_green_list(self, prev_token: int) -> torch.Tensor:
+        return self.bitmap.get_row(prev_token)
+    
+    def is_token_in_green_list(self, token: int, prev_token: int) -> bool:
+        green_list = self.bitmap.get_row(prev_token)
+        return bool(green_list[token].item())
 
     def apply_once(
         self,

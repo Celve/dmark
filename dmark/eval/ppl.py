@@ -83,8 +83,10 @@ def process_json_file(
         full_ids = tokenizer(full_text, add_special_tokens=False).input_ids
         perplexity = ppl_calculator.analyze_tokens(full_ids)
         
-        # Add perplexity to result
-        result["perplexity"] = perplexity
+        # Add perplexity to result under text_quality
+        if "text_quality" not in result:
+            result["text_quality"] = {}
+        result["text_quality"]["perplexity"] = perplexity
     
     # Save results to new file
     with open(output_file, 'w') as f:
@@ -94,7 +96,7 @@ def process_json_file(
     print(f"Results saved to: {output_file}")
     
     # Print summary statistics
-    perplexities = [r["perplexity"] for r in results if r.get("perplexity") is not None]
+    perplexities = [r["text_quality"]["perplexity"] for r in results if r.get("text_quality") and r["text_quality"].get("perplexity") is not None]
     if perplexities:
         avg_ppl = sum(perplexities) / len(perplexities)
         max_ppl = max(perplexities)

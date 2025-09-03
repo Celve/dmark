@@ -111,9 +111,10 @@ def main():
         help="Path to input directory or JSON file containing generation results"
     )
     parser.add_argument(
-        "--output",
+        "--output_dir",
         type=str,
-        help="Path to output JSON file with perplexity scores added (default: input_ppl.json)"
+        default=None,
+        help="Directory to save output files (default: same as input)"
     )
     parser.add_argument(
         "--model",
@@ -136,13 +137,18 @@ def main():
         print(f"Error: Input path '{args.input}' not found")
         return
     
+    # Create output directory if specified
+    if args.output_dir:
+        os.makedirs(args.output_dir, exist_ok=True)
+    
     # Determine if input is a file or directory
     if os.path.isfile(args.input):
         # Process single file
-        if args.output is None:
-            output_file = args.input.replace(".json", "_ppl.json")
+        if args.output_dir:
+            base_name = os.path.basename(args.input).replace(".json", "_ppl.json")
+            output_file = os.path.join(args.output_dir, base_name)
         else:
-            output_file = args.output
+            output_file = args.input.replace(".json", "_ppl.json")
         process_json_file(args.input, output_file, args.model, args.device)
     elif os.path.isdir(args.input):
         # Process all JSON files in directory
@@ -156,7 +162,12 @@ def main():
         
         for json_file in json_files:
             input_path = os.path.join(args.input, json_file)
-            output_path = input_path.replace(".json", "_ppl.json")
+            
+            if args.output_dir:
+                output_name = json_file.replace(".json", "_ppl.json")
+                output_path = os.path.join(args.output_dir, output_name)
+            else:
+                output_path = input_path.replace(".json", "_ppl.json")
             
             print(f"\nProcessing: {json_file}")
             process_json_file(input_path, output_path, args.model, args.device)

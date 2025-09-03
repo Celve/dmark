@@ -148,6 +148,12 @@ def main():
         help="Path to input directory or JSON file containing generation results"
     )
     parser.add_argument(
+        "--output_dir",
+        type=str,
+        default=None,
+        help="Directory to save output files (default: same as input)"
+    )
+    parser.add_argument(
         "--bitmap",
         type=str,
         default="bitmap.bin",
@@ -167,10 +173,18 @@ def main():
         print(f"Error: Input path '{args.input}' not found")
         return
     
+    # Create output directory if specified
+    if args.output_dir:
+        os.makedirs(args.output_dir, exist_ok=True)
+    
     # Determine if input is a file or directory
     if os.path.isfile(args.input):
         # Process single file
-        output_file = args.input.replace(".json", "_zscore.json")
+        if args.output_dir:
+            base_name = os.path.basename(args.input).replace(".json", "_zscore.json")
+            output_file = os.path.join(args.output_dir, base_name)
+        else:
+            output_file = args.input.replace(".json", "_zscore.json")
         process_json_file(args.input, output_file, args.bitmap, args.model)
     elif os.path.isdir(args.input):
         # Process all JSON files in directory
@@ -184,7 +198,12 @@ def main():
         
         for json_file in json_files:
             input_path = os.path.join(args.input, json_file)
-            output_path = input_path.replace(".json", "_zscore.json")
+            
+            if args.output_dir:
+                output_name = json_file.replace(".json", "_zscore.json")
+                output_path = os.path.join(args.output_dir, output_name)
+            else:
+                output_path = input_path.replace(".json", "_zscore.json")
             
             print(f"\nProcessing: {json_file}")
             process_json_file(input_path, output_path, args.bitmap, args.model)

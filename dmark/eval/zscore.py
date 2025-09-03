@@ -174,15 +174,15 @@ def main():
         return
     
     # Create output directory if specified
-    if args.output_dir:
-        os.makedirs(args.output_dir, exist_ok=True)
+    if args.output:
+        os.makedirs(args.output, exist_ok=True)
     
     # Determine if input is a file or directory
     if os.path.isfile(args.input):
         # Process single file
-        if args.output_dir:
+        if args.output:
             base_name = os.path.basename(args.input).replace(".json", "_zscore.json")
-            output_file = os.path.join(args.output_dir, base_name)
+            output_file = os.path.join(args.output, base_name)
         else:
             output_file = args.input.replace(".json", "_zscore.json")
         process_json_file(args.input, output_file, args.bitmap, args.model)
@@ -199,9 +199,9 @@ def main():
         for json_file in json_files:
             input_path = os.path.join(args.input, json_file)
             
-            if args.output_dir:
+            if args.output:
                 output_name = json_file.replace(".json", "_zscore.json")
-                output_path = os.path.join(args.output_dir, output_name)
+                output_path = os.path.join(args.output, output_name)
             else:
                 output_path = input_path.replace(".json", "_zscore.json")
             

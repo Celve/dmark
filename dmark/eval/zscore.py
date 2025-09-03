@@ -145,7 +145,7 @@ def main():
         "--input",
         type=str,
         required=True,
-        help="Path to input JSON file containing generation results"
+        help="Path to input directory or JSON file containing generation results"
     )
     parser.add_argument(
         "--bitmap",
@@ -162,15 +162,35 @@ def main():
     
     args = parser.parse_args()
     
-    # Check if input file exists
+    # Check if input exists
     if not os.path.exists(args.input):
-        print(f"Error: Input file '{args.input}' not found")
+        print(f"Error: Input path '{args.input}' not found")
         return
     
-    output_file = args.input.replace(".json", "_zscore.json")
-    
-    # Process the file
-    process_json_file(args.input, output_file, args.bitmap, args.model)
+    # Determine if input is a file or directory
+    if os.path.isfile(args.input):
+        # Process single file
+        output_file = args.input.replace(".json", "_zscore.json")
+        process_json_file(args.input, output_file, args.bitmap, args.model)
+    elif os.path.isdir(args.input):
+        # Process all JSON files in directory
+        json_files = [f for f in os.listdir(args.input) if f.endswith('.json') and not f.endswith('_zscore.json')]
+        
+        if not json_files:
+            print(f"No JSON files found in directory: {args.input}")
+            return
+        
+        print(f"Found {len(json_files)} JSON files to process")
+        
+        for json_file in json_files:
+            input_path = os.path.join(args.input, json_file)
+            output_path = input_path.replace(".json", "_zscore.json")
+            
+            print(f"\nProcessing: {json_file}")
+            process_json_file(input_path, output_path, args.bitmap, args.model)
+    else:
+        print(f"Error: '{args.input}' is neither a file nor a directory")
+        return
 
 
 if __name__ == "__main__":

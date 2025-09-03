@@ -111,7 +111,7 @@ def main():
         help="Path to input directory or JSON file containing generation results"
     )
     parser.add_argument(
-        "--output_dir",
+        "--output",
         type=str,
         default=None,
         help="Directory to save output files (default: same as input)"

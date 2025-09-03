@@ -81,7 +81,7 @@ def generate(
         block_length: Block length, less than or equal to gen_length. If less than gen_length, it means using semi_autoregressive remasking.
         temperature: Categorical distribution sampling temperature.
         cfg_scale: Unsupervised classifier-free guidance scale.
-        remasking: Remasking strategy. 'low_confidence' or 'random'.
+        remasking: Remasking strategy. 'low_confidence', 'random', 'right_to_left', or 'left_to_right'.
         mask_id: The toke id of [MASK] is 126336.
     """
     if watermark is not None:
@@ -144,6 +144,20 @@ def generate(
                 )  # b, l
             elif remasking == "random":
                 x0_p = torch.rand((x0.shape[0], x0.shape[1]), device=x0.device)
+            elif remasking in ["right_to_left", "left_to_right"]:
+                # Create position-based confidence scores
+                x0_p = torch.zeros((x0.shape[0], x0.shape[1]), device=x0.device)
+                for b in range(x0.shape[0]):
+                    start_idx = prompt.shape[1] + num_block * block_length
+                    end_idx = prompt.shape[1] + (num_block + 1) * block_length
+                    for idx in range(start_idx, end_idx):
+                        if mask_index[b, idx]:
+                            if remasking == "right_to_left":
+                                # Remask from right to left: higher confidence for rightmost tokens
+                                x0_p[b, idx] = end_idx - idx
+                            else:  # left_to_right
+                                # Remask from left to right: higher confidence for leftmost tokens
+                                x0_p[b, idx] = idx - start_idx + 1
             else:
                 raise NotImplementedError(remasking)
 
@@ -221,7 +235,7 @@ def parse_args():
         "--remasking",
         type=str,
         default="low_confidence",
-        choices=["low_confidence", "random"],
+        choices=["low_confidence", "random", "right_to_left", "left_to_right"],
         help="Remasking strategy",
     )
 

@@ -56,7 +56,7 @@ def parse_args():
     parser.add_argument("--block_length", type=int, default=32)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--cfg_scale", type=float, default=0.0)
-    parser.add_argument("--remasking", type=str, default="low_confidence", choices=["low_confidence", "random"])
+    parser.add_argument("--remasking", type=str, default="low_confidence", choices=["low_confidence", "random", "right_to_left", "left_to_right"])
 
     # now it's time to add watermark arguments 
     # even though many of them have default values, the watermark will only be enabled if the strategy is not None

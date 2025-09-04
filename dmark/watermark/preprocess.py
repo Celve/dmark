@@ -12,7 +12,7 @@ def preprocess(watermark_config: WatermarkConfig, file_path: str):
     start_time = time.time()
     print(f"Starting preprocessing for vocab_size={watermark_config.vocab_size}")
 
-    persistent_bitmap = PersistentBitmap(watermark_config.vocab_size, file_path)
+    persistent_bitmap = PersistentBitmap(watermark_config.vocab_size, file_path, True)
 
     for token in tqdm(range(watermark_config.vocab_size), desc="Processing tokens"):
         green_list = watermark_config.gen_green_list(torch.tensor(token)).bool()

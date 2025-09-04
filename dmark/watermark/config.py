@@ -13,6 +13,7 @@ class WatermarkConfig(BaseModel):
     key: int
     prebias: bool = False
     strategy: Optional[str] = None
+    bitmap_path: Optional[str] = None
 
     def gen_green_list(self, prev_token: torch.Tensor) -> torch.Tensor:
         torch.manual_seed(prev_token.item() * self.key)

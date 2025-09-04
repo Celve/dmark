@@ -92,7 +92,8 @@ def process_json_file(
         delta=wm_meta.get("delta", 2.0),
         key=wm_meta.get("key", 42),
         prebias=wm_meta.get("prebias", False),
-        strategy=wm_meta.get("strategy", "normal")
+        strategy=wm_meta.get("strategy", "normal"),
+        bitmap_path=bitmap_file
     )
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     bitmap = PersistentBitmap(watermark_config.vocab_size, bitmap_file)

@@ -89,6 +89,7 @@ def parse_args():
         key=args.key,
         prebias=args.prebias,
         strategy=args.strategy,
+        bitmap_path=args.bitmap
     )
 
     expr_config = ExprConfig(

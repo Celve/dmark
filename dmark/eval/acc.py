@@ -17,6 +17,7 @@ def run_acc(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[dict[s
         key=args.watermark_config.key,
         prebias=args.watermark_config.prebias,
         strategy=None,
+        bitmap_path=args.watermark_config.bitmap_path
     )
 
     # we run the no-watermarked generation first

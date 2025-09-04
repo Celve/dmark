@@ -292,7 +292,6 @@ def run_generation(
     cfg_scale: float,
     remasking: str,
     watermark_config: WatermarkConfig,
-    bitmap_path: str,
     output_dir: Optional[str],
     enable_ppl: bool,
 ) -> list[dict[str, Any]]:
@@ -302,7 +301,7 @@ def run_generation(
 
     # Set up watermarking if config is provided
     if watermark_config.strategy is not None:
-        bitmap = PersistentBitmap(watermark_config.vocab_size, bitmap_path)
+        bitmap = PersistentBitmap(watermark_config.vocab_size, watermark_config.bitmap_path)
         watermark = Watermark(watermark_config, bitmap)
         enable_watermark = True
     else: 
@@ -457,7 +456,6 @@ def main():
         cfg_scale=args.cfg_scale,
         remasking=args.remasking,
         watermark_config=args.watermark_config,
-        bitmap_path=args.bitmap,
         output_dir=args.output_dir,
         enable_ppl=args.ppl,
     )

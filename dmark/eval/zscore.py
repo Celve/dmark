@@ -96,7 +96,7 @@ def process_json_file(
         bitmap_path=bitmap_file
     )
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    bitmap = PersistentBitmap(watermark_config.vocab_size, bitmap_file)
+    bitmap = PersistentBitmap(watermark_config.vocab_size, watermark_config.bitmap_path)
     watermark = Watermark(watermark_config, bitmap)
     
     # Process each result

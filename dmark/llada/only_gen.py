@@ -177,7 +177,7 @@ def run_generation(
 
     # Set up watermarking if config is provided
     if watermark_config.strategy is not None:
-        bitmap = PersistentBitmap(watermark_config.vocab_size, watermark_config.bitmap if hasattr(watermark_config, 'bitmap') else "bitmap.bin")
+        bitmap = PersistentBitmap(watermark_config.vocab_size, watermark_config.bitmap_path)
         watermark = Watermark(watermark_config, bitmap)
     else: 
         watermark = None

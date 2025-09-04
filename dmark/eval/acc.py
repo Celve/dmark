@@ -33,7 +33,6 @@ def run_acc(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[dict[s
         cfg_scale=args.cfg_scale,
         remasking=args.remasking,
         watermark_config=no_watermark_config,
-        bitmap_path=args.bitmap,
         output_dir=args.output_dir,
         enable_ppl=args.ppl,
     )
@@ -51,7 +50,6 @@ def run_acc(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[dict[s
         cfg_scale=args.cfg_scale,
         remasking=args.remasking,
         watermark_config=args.watermark_config,
-        bitmap_path=args.bitmap,
         output_dir=args.output_dir,
         enable_ppl=args.ppl,
     )

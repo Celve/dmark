@@ -16,8 +16,7 @@ def preprocess(watermark_config: WatermarkConfig, file_path: str):
 
     for token in tqdm(range(watermark_config.vocab_size), desc="Processing tokens"):
         green_list = watermark_config.gen_green_list(torch.tensor(token)).bool()
-        green_list_ndarray = green_list.numpy()
-        persistent_bitmap.set_row(token, green_list_ndarray)
+        persistent_bitmap.set_row(token, green_list)
 
     persistent_bitmap.save()
 

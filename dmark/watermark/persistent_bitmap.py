@@ -10,10 +10,14 @@ class PersistentBitmap:
         self.vocab_size = vocab_size
         self.filepath = filepath
 
-        if os.path.exists(filepath):
-            self._load()
-        else:
-            self._initialize()
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(
+                f"Bitmap file not found: {filepath}\n"
+                f"Please run preprocessing first to generate the bitmap:\n"
+                f"  python -m dmark.watermark.preprocess --output_dir <dir> --vocab_size {vocab_size} --ratio <ratio> --key <key>"
+            )
+        
+        self._load()
 
     def _initialize(self):
         self.matrix = torch.zeros((self.vocab_size, self.vocab_size), dtype=torch.bool)

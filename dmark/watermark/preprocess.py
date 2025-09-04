@@ -26,10 +26,58 @@ def preprocess(watermark_config: WatermarkConfig, file_path: str):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, required=True)
-    parser.add_argument("--bitmap", type=str, required=True)
+    parser = argparse.ArgumentParser(description="Preprocess and generate bitmap for watermarking")
+    
+    # Required arguments
+    parser.add_argument(
+        "--output_dir", 
+        type=str, 
+        default=".",
+        help="Directory to save the bitmap file (default: current directory)"
+    )
+    
+    # Essential parameters for bitmap generation
+    parser.add_argument(
+        "--vocab_size", 
+        type=int, 
+        default=126464,
+        help="Vocabulary size (default: 126464)"
+    )
+    parser.add_argument(
+        "--ratio", 
+        type=float, 
+        default=0.5,
+        help="Green list ratio (default: 0.5)"
+    )
+    parser.add_argument(
+        "--key", 
+        type=int, 
+        default=42,
+        help="Random seed key for watermark (default: 42)"
+    )
+    
     args = parser.parse_args()
-
-    watermark_config = WatermarkConfig.from_json(args.config)
-    preprocess(watermark_config, args.bitmap)
+    
+    # Create output directory if it doesn't exist
+    import os
+    os.makedirs(args.output_dir, exist_ok=True)
+    
+    # Generate bitmap filename based on parameters
+    bitmap_filename = f"bitmap_v{args.vocab_size}_r{int(args.ratio*100)}_k{args.key}.bin"
+    bitmap_path = os.path.join(args.output_dir, bitmap_filename)
+    
+    # Create watermark config with only essential parameters
+    # Note: delta, prebias, and strategy are not needed for bitmap generation
+    watermark_config = WatermarkConfig(
+        vocab_size=args.vocab_size,
+        ratio=args.ratio,
+        delta=2.0,  # Default value, not used in preprocessing
+        key=args.key,
+        prebias=False,  # Default value, not used in preprocessing
+        strategy="normal"  # Default value, not used in preprocessing
+    )
+    
+    print(f"Generating bitmap: vocab_size={args.vocab_size}, ratio={args.ratio}, key={args.key}")
+    print(f"Output file: {bitmap_path}")
+    
+    preprocess(watermark_config, bitmap_path)

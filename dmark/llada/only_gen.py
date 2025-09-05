@@ -179,6 +179,19 @@ def run_generation(
         dataset_iter = iter(dataset)
         dataset_format = "text"  # C4 has 'text' field
         use_streaming = True
+    elif gen_config.dataset == "openai/openai_humaneval":
+        # Load HumanEval dataset (only has test split)
+        dataset = load_dataset("openai/openai_humaneval", split="test")
+        dataset_format = "code"  # HumanEval has prompt/canonical_solution fields
+        use_streaming = False
+    elif gen_config.dataset.startswith("wmt16:"):
+        # Parse WMT16 configuration (e.g., "wmt16:de-en" for German-English)
+        lang_pair = gen_config.dataset.split(":")[1]
+        dataset = load_dataset("wmt/wmt16", lang_pair, split="train")
+        dataset_format = "translation"  # WMT16 has translation field with language pairs
+        use_streaming = False
+        # Parse source and target languages
+        src_lang, tgt_lang = lang_pair.split("-")
     else:
         dataset = load_dataset(gen_config.dataset, split="train")
         dataset_format = "qa"  # Default format with question/answer fields
@@ -243,6 +256,50 @@ def run_generation(
                 gt = tokenizer.decode(gt_ids, skip_special_tokens=True)
                 
                 # For text datasets, use prompt directly without chat template
+                input_ids = prompt_ids.unsqueeze(0).to(device)
+                
+            elif dataset_format == "code":
+                # Handle code datasets (like HumanEval)
+                if dataset_idx >= len(dataset):
+                    print(f"Dataset exhausted at index {dataset_idx}.")
+                    break
+                
+                sample = dataset[dataset_idx]
+                dataset_idx += 1
+                
+                # Get prompt (function signature + docstring)
+                prompt = sample["prompt"]
+                # Store canonical solution as ground truth for reference (not for matching)
+                gt = sample["canonical_solution"]
+                
+                # Tokenize the prompt
+                prompt_ids = tokenizer(prompt, return_tensors="pt")["input_ids"][0]
+                
+                # For code datasets, use prompt directly without chat template
+                input_ids = prompt_ids.unsqueeze(0).to(device)
+                
+            elif dataset_format == "translation":
+                # Handle translation datasets (like WMT16)
+                if dataset_idx >= len(dataset):
+                    print(f"Dataset exhausted at index {dataset_idx}.")
+                    break
+                
+                sample = dataset[dataset_idx]
+                dataset_idx += 1
+                
+                # Get source and target texts from translation field
+                translation = sample["translation"]
+                source_text = translation[src_lang]
+                target_text = translation[tgt_lang]
+                
+                # Use source text as prompt, target text as ground truth
+                prompt = source_text
+                gt = target_text
+                
+                # Tokenize the source text
+                prompt_ids = tokenizer(prompt, return_tensors="pt")["input_ids"][0]
+                
+                # For translation datasets, use prompt directly without chat template
                 input_ids = prompt_ids.unsqueeze(0).to(device)
                 
             else:

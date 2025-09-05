@@ -15,7 +15,8 @@ from dmark.watermark.watermark import Watermark
 def calculate_zscore(
     output_ids: List[int],
     watermark: Watermark,
-    prompt_ids: List[int]
+    prompt_ids: List[int],
+    max_tokens: int = None
 ) -> tuple[float, float]:
     """Calculate z-score for watermark detection.
     
@@ -23,6 +24,7 @@ def calculate_zscore(
         output_ids: List of token IDs to check for watermark (generated tokens only)
         watermark: Watermark instance for efficient green list generation
         prompt_ids: List of prompt token IDs
+        max_tokens: Maximum number of tokens to analyze (None = analyze all)
     
     Returns:
         Tuple of (detection_rate, z_score)
@@ -30,7 +32,10 @@ def calculate_zscore(
     detected = 0
     gen_len = 0
     
-    for index in range(len(output_ids)):
+    # Limit to max_tokens if specified
+    tokens_to_check = len(output_ids) if max_tokens is None else min(max_tokens, len(output_ids))
+    
+    for index in range(tokens_to_check):
         curr_token = output_ids[index]
         
         # Skip special tokens (EOS tokens)
@@ -66,7 +71,8 @@ def process_json_file(
     input_file: str,
     output_file: str,
     bitmap_file: str = "bitmap.bin",
-    model_name: str = "facebook/llada-760m-split2"
+    model_name: str = "facebook/llada-760m-split2",
+    max_tokens: int = None
 ) -> None:
     """Process a JSON file containing generation results and add z-scores.
     
@@ -75,6 +81,7 @@ def process_json_file(
         output_file: Path to output JSON file
         bitmap_file: Path to bitmap file for watermark detection
         model_name: Model name for tokenizer
+        max_tokens: Maximum number of tokens to analyze (None = analyze all)
     """
     # Load the JSON data
     with open(input_file, 'r') as f:
@@ -115,7 +122,8 @@ def process_json_file(
         detection_rate, z_score = calculate_zscore(
             output_ids,
             watermark,
-            prompt_ids
+            prompt_ids,
+            max_tokens
         )
         
         # Add z-score and detection rate to result
@@ -166,6 +174,12 @@ def main():
         default="GSAI-ML/LLaDA-8B-Instruct",
         help="Model name for tokenizer (default: GSAI-ML/LLaDA-8B-Instruct)"
     )
+    parser.add_argument(
+        "--max_tokens",
+        type=int,
+        default=None,
+        help="Maximum number of tokens to analyze (default: all tokens)"
+    )
     
     args = parser.parse_args()
     
@@ -186,7 +200,7 @@ def main():
             output_file = os.path.join(args.output, base_name)
         else:
             output_file = args.input.replace(".json", "_zscore.json")
-        process_json_file(args.input, output_file, args.bitmap, args.model)
+        process_json_file(args.input, output_file, args.bitmap, args.model, args.max_tokens)
     elif os.path.isdir(args.input):
         # Process all JSON files in directory
         json_files = [f for f in os.listdir(args.input) if f.endswith('.json') and not f.endswith('_zscore.json')]
@@ -207,7 +221,7 @@ def main():
                 output_path = input_path.replace(".json", "_zscore.json")
             
             print(f"\nProcessing: {json_file}")
-            process_json_file(input_path, output_path, args.bitmap, args.model)
+            process_json_file(input_path, output_path, args.bitmap, args.model, args.max_tokens)
     else:
         print(f"Error: '{args.input}' is neither a file nor a directory")
         return

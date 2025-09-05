@@ -172,8 +172,17 @@ def run_generation(
     expr_config: ExprConfig,
 ) -> list[dict[str, Any]]:
     """Run the generation process with optional watermarking."""
-    # Load dataset
-    dataset = load_dataset(gen_config.dataset, split="train")
+    # Load dataset - handle different dataset configurations
+    if gen_config.dataset == "allenai/c4":
+        # Load C4 dataset with streaming for memory efficiency
+        dataset = load_dataset("allenai/c4", "en", split="train", streaming=True)
+        dataset_iter = iter(dataset)
+        dataset_format = "text"  # C4 has 'text' field
+        use_streaming = True
+    else:
+        dataset = load_dataset(gen_config.dataset, split="train")
+        dataset_format = "qa"  # Default format with question/answer fields
+        use_streaming = False
 
     # Set up watermarking if config is provided
     if watermark_config.strategy is not None:
@@ -199,18 +208,60 @@ def run_generation(
     pbar = tqdm.tqdm(total=expr_config.num_samples, desc="Collecting valid samples")
     
     try:
-        while len(results) < expr_config.num_samples and dataset_idx < len(dataset):
-            prompt = dataset[dataset_idx]["question"]
-            gt = dataset[dataset_idx]["answer"]
-            m = [
-                {"role": "user", "content": prompt},
-            ]
-            prompt = tokenizer.apply_chat_template(
-                m, add_generation_prompt=True, tokenize=False
-            )
-
-            input_ids = tokenizer(prompt)["input_ids"]
-            input_ids = torch.tensor(input_ids).to(device).unsqueeze(0)
+        while len(results) < expr_config.num_samples:
+            # Get next sample based on dataset format
+            if dataset_format == "text":
+                # Handle text-based datasets (like C4)
+                try:
+                    if use_streaming:
+                        sample = next(dataset_iter)
+                    else:
+                        if dataset_idx >= len(dataset):
+                            print(f"Dataset exhausted at index {dataset_idx}.")
+                            break
+                        sample = dataset[dataset_idx]
+                        dataset_idx += 1
+                except StopIteration:
+                    print("Dataset exhausted.")
+                    break
+                
+                # Get text and tokenize it
+                text = sample["text"]
+                text_tokens = tokenizer(text, return_tensors="pt")["input_ids"][0]
+                
+                # Skip if text is too short (need at least 30 tokens for prompt + gen_length for ground truth)
+                min_required_tokens = 30 + gen_config.gen_length
+                if len(text_tokens) < min_required_tokens:
+                    continue
+                
+                # Take first 30 tokens as prompt, next gen_length tokens as ground truth
+                prompt_ids = text_tokens[:30]
+                gt_ids = text_tokens[30:30 + gen_config.gen_length]
+                
+                # Decode prompt and ground truth
+                prompt = tokenizer.decode(prompt_ids, skip_special_tokens=True)
+                gt = tokenizer.decode(gt_ids, skip_special_tokens=True)
+                
+                # For text datasets, use prompt directly without chat template
+                input_ids = prompt_ids.unsqueeze(0).to(device)
+                
+            else:
+                # Handle QA-based datasets (like ELI5)
+                if dataset_idx >= len(dataset):
+                    print(f"Dataset exhausted at index {dataset_idx}.")
+                    break
+                    
+                prompt = dataset[dataset_idx]["question"]
+                gt = dataset[dataset_idx]["answer"]
+                m = [
+                    {"role": "user", "content": prompt},
+                ]
+                prompt = tokenizer.apply_chat_template(
+                    m, add_generation_prompt=True, tokenize=False
+                )
+                input_ids = tokenizer(prompt)["input_ids"]
+                input_ids = torch.tensor(input_ids).to(device).unsqueeze(0)
+                dataset_idx += 1
 
             if (
                 watermark_config.strategy == "legacy-ahead"

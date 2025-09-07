@@ -292,15 +292,30 @@ def run_generation(
                 source_text = translation[src_lang]
                 target_text = translation[tgt_lang]
                 
-                # Use source text as prompt, target text as ground truth
-                prompt = source_text
+                # Create translation instruction prompt
+                lang_names = {
+                    "cs": "Czech", "de": "German", "fi": "Finnish",
+                    "ro": "Romanian", "ru": "Russian", "tr": "Turkish",
+                    "en": "English"
+                }
+                src_lang_name = lang_names.get(src_lang, src_lang)
+                tgt_lang_name = lang_names.get(tgt_lang, tgt_lang)
+                
+                # Format as instruction for translation
+                prompt = f"Translate the following text from {src_lang_name} to {tgt_lang_name}:\n\n{source_text}\n\nTranslation:"
                 gt = target_text
                 
-                # Tokenize the source text
-                prompt_ids = tokenizer(prompt, return_tensors="pt")["input_ids"][0]
+                # For translation, use chat template for better instruction following
+                m = [
+                    {"role": "user", "content": prompt},
+                ]
+                prompt = tokenizer.apply_chat_template(
+                    m, add_generation_prompt=True, tokenize=False
+                )
                 
-                # For translation datasets, use prompt directly without chat template
-                input_ids = prompt_ids.unsqueeze(0).to(device)
+                # Tokenize the prompt
+                input_ids = tokenizer(prompt)["input_ids"]
+                input_ids = torch.tensor(input_ids).to(device).unsqueeze(0)
                 
             else:
                 # Handle QA-based datasets (like ELI5)

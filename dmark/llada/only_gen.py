@@ -268,15 +268,24 @@ def run_generation(
                 dataset_idx += 1
                 
                 # Get prompt (function signature + docstring)
-                prompt = sample["prompt"]
+                code_prompt = sample["prompt"]
                 # Store canonical solution as ground truth for reference (not for matching)
                 gt = sample["canonical_solution"]
                 
-                # Tokenize the prompt
-                prompt_ids = tokenizer(prompt, return_tensors="pt")["input_ids"][0]
+                # Create instruction prompt for code completion
+                prompt = f"Complete the following Python function:\n\n{code_prompt}"
                 
-                # For code datasets, use prompt directly without chat template
-                input_ids = prompt_ids.unsqueeze(0).to(device)
+                # For code generation, use chat template for better instruction following
+                m = [
+                    {"role": "user", "content": prompt},
+                ]
+                prompt = tokenizer.apply_chat_template(
+                    m, add_generation_prompt=True, tokenize=False
+                )
+                
+                # Tokenize the prompt
+                input_ids = tokenizer(prompt)["input_ids"]
+                input_ids = torch.tensor(input_ids).to(device).unsqueeze(0)
                 
             elif dataset_format == "translation":
                 # Handle translation datasets (like WMT16)

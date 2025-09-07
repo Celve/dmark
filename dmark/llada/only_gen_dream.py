@@ -10,8 +10,6 @@ import tqdm
 from transformers import AutoModel, AutoTokenizer
 from datasets import load_dataset
 
-from dmark.llada.gen_llada import generate
-from dmark.llada.gen_legacy import generate_LLaDA
 from dmark.watermark.config import WatermarkConfig
 from dmark.watermark.persistent_bitmap import PersistentBitmap
 from dmark.watermark.watermark import Watermark
@@ -21,12 +19,17 @@ device = "cuda"
 class GenConfig(BaseModel):
     model: str
     dataset: str
-    steps: int = 256
+    steps: int = 512
     gen_length: int = 256
-    block_length: int = 32
-    temperature: float = 0.0
-    cfg_scale: float = 0.0
-    remasking: str = "low_confidence"
+    temperature: float = 0.2
+    # DREAM-specific parameters
+    alg: str = "entropy"  # "origin", "maskgit_plus", "topk_margin", "entropy"
+    alg_temp: float = 0.0
+    eps: float = 1e-3
+    top_p: float = 0.95
+    top_k: Optional[int] = None
+    output_history: bool = False
+    return_dict_in_generate: bool = True
 
 class ExprConfig(BaseModel):
     num_samples: int
@@ -41,8 +44,8 @@ def parse_args():
     parser.add_argument(
         "--model",
         type=str,
-        default="GSAI-ML/LLaDA-8B-Instruct",
-        help="Model name or path",
+        default="Dream-org/Dream-v0-Instruct-7B",
+        help="DREAM model name or path",
     )
 
     # then we add number of samples and output directory
@@ -50,17 +53,21 @@ def parse_args():
     parser.add_argument("--minimum_output_token", type=int, default=None)
     parser.add_argument("--output_dir", type=str, default=None)
 
-    # then we add generation arguments
-    parser.add_argument("--steps", type=int, default=256)
+    # then we add DREAM generation arguments
+    parser.add_argument("--steps", type=int, default=512)
     parser.add_argument("--gen_length", type=int, default=256)
-    parser.add_argument("--block_length", type=int, default=32)
-    parser.add_argument("--temperature", type=float, default=0.0)
-    parser.add_argument("--cfg_scale", type=float, default=0.0)
-    parser.add_argument("--remasking", type=str, default="low_confidence", choices=["low_confidence", "random", "right_to_left", "left_to_right"])
+    parser.add_argument("--temperature", type=float, default=0.2)
+    parser.add_argument("--alg", type=str, default="entropy", choices=["origin", "maskgit_plus", "topk_margin", "entropy"])
+    parser.add_argument("--alg_temp", type=float, default=0.0)
+    parser.add_argument("--eps", type=float, default=1e-3)
+    parser.add_argument("--top_p", type=float, default=0.95)
+    parser.add_argument("--top_k", type=int, default=None)
+    parser.add_argument("--output_history", action="store_true", help="Output generation history")
+    parser.add_argument("--return_dict_in_generate", action="store_true", default=True, help="Return dict in generate")
 
     # now it's time to add watermark arguments 
     # even though many of them have default values, the watermark will only be enabled if the strategy is not None
-    parser.add_argument("--strategy", type=str, default=None, choices=["normal", "predict", "reverse", "legacy-ahead", "legacy-both"])
+    parser.add_argument("--strategy", type=str, default=None, choices=["normal", "predict", "reverse"])
     parser.add_argument("--bitmap", type=str, default="bitmap.bin")
     parser.add_argument("--vocab_size", type=int, default=126464)
     parser.add_argument("--ratio", type=float, default=0.5)
@@ -76,10 +83,14 @@ def parse_args():
         dataset=args.dataset,
         steps=args.steps,
         gen_length=args.gen_length,
-        block_length=args.block_length,
         temperature=args.temperature,
-        cfg_scale=args.cfg_scale,
-        remasking=args.remasking,
+        alg=args.alg,
+        alg_temp=args.alg_temp,
+        eps=args.eps,
+        top_p=args.top_p,
+        top_k=args.top_k,
+        output_history=args.output_history,
+        return_dict_in_generate=args.return_dict_in_generate,
     )
 
     watermark_config = WatermarkConfig(
@@ -117,17 +128,25 @@ def generate_result_filename(
         "results",
         gen_config.dataset.replace('/', '_'),
         model_name,
+        "dream",  # Indicate this is DREAM model
     ]
     
     # Add generation parameters
     components.extend([
         f"steps{gen_config.steps}",
         f"len{gen_config.gen_length}",
-        f"blk{gen_config.block_length}",
         f"temp{gen_config.temperature}",
-        f"cfg{gen_config.cfg_scale}",
-        f"mask_{gen_config.remasking}",
+        f"alg_{gen_config.alg}",
+        f"alg_temp{gen_config.alg_temp}",
     ])
+    
+    # Add optional DREAM parameters
+    if gen_config.eps != 1e-3:
+        components.append(f"eps{gen_config.eps}")
+    if gen_config.top_p != 0.95:
+        components.append(f"top_p{gen_config.top_p}")
+    if gen_config.top_k is not None:
+        components.append(f"top_k{gen_config.top_k}")
     
     # Add watermark parameters if enabled
     if watermark_config.strategy is not None:
@@ -201,19 +220,33 @@ def run_generation(
     if watermark_config.strategy is not None:
         bitmap = PersistentBitmap(watermark_config.vocab_size, watermark_config.bitmap_path)
         watermark = Watermark(watermark_config, bitmap)
+        # Import the custom diffusion_generate that supports watermark
+        from dmark.llada.gen_dream import DreamGenerationMixin
+        # We'll need to monkey-patch the model with the custom generation method
+        use_custom_generation = True
     else: 
         watermark = None
+        use_custom_generation = False
 
-    # Load model
-    model = (
-        AutoModel.from_pretrained(
-            gen_config.model,
-            trust_remote_code=True,
-            torch_dtype=torch.bfloat16,
-        )
-        .to(device)
-        .eval()
-    )
+    # Load DREAM model
+    model = AutoModel.from_pretrained(
+        gen_config.model,
+        torch_dtype=torch.bfloat16,
+        trust_remote_code=True
+    ).to(device).eval()
+    
+    # If watermarking is enabled, add the custom generation method
+    if use_custom_generation:
+        # Add the custom diffusion_generate method that supports watermarking
+        DreamGenerationMixin.diffusion_generate.__get__(model, model.__class__)
+        model.diffusion_generate = DreamGenerationMixin.diffusion_generate.__get__(model, model.__class__)
+        model._sample = DreamGenerationMixin._sample.__get__(model, model.__class__)
+        model._prepare_generation_config = DreamGenerationMixin._prepare_generation_config.__get__(model, model.__class__)
+        model._prepare_special_tokens = DreamGenerationMixin._prepare_special_tokens.__get__(model, model.__class__)
+        model._prepare_generated_length = DreamGenerationMixin._prepare_generated_length.__get__(model, model.__class__)
+        model._validate_generated_length = DreamGenerationMixin._validate_generated_length.__get__(model, model.__class__)
+        model._expand_inputs_for_generation = DreamGenerationMixin._expand_inputs_for_generation.__get__(model, model.__class__)
+    
     tokenizer = AutoTokenizer.from_pretrained(gen_config.model, trust_remote_code=True)
 
     results = []
@@ -257,6 +290,7 @@ def run_generation(
                 
                 # For text datasets, use prompt directly without chat template
                 input_ids = prompt_ids.unsqueeze(0).to(device)
+                attention_mask = torch.ones_like(input_ids)
                 
             elif dataset_format == "code":
                 # Handle code datasets (like HumanEval)
@@ -273,19 +307,18 @@ def run_generation(
                 gt = sample["canonical_solution"]
                 
                 # Create instruction prompt for code completion
-                prompt = f"Complete the following Python function:\n\n{code_prompt}"
+                prompt_content = f"Complete the following Python function:\n\n{code_prompt}"
                 
                 # For code generation, use chat template for better instruction following
-                m = [
-                    {"role": "user", "content": prompt},
+                messages = [
+                    {"role": "user", "content": prompt_content},
                 ]
-                prompt = tokenizer.apply_chat_template(
-                    m, add_generation_prompt=True, tokenize=False
+                inputs = tokenizer.apply_chat_template(
+                    messages, return_tensors="pt", return_dict=True, add_generation_prompt=True
                 )
-                
-                # Tokenize the prompt
-                input_ids = tokenizer(prompt)["input_ids"]
-                input_ids = torch.tensor(input_ids).to(device).unsqueeze(0)
+                input_ids = inputs.input_ids.to(device)
+                attention_mask = inputs.attention_mask.to(device)
+                prompt = tokenizer.decode(input_ids[0], skip_special_tokens=False)
                 
             elif dataset_format == "translation":
                 # Handle translation datasets (like WMT16)
@@ -311,20 +344,19 @@ def run_generation(
                 tgt_lang_name = lang_names.get(tgt_lang, tgt_lang)
                 
                 # Format as instruction for translation
-                prompt = f"Translate the following text from {src_lang_name} to {tgt_lang_name}:\n\n{source_text}\n\nTranslation:"
+                prompt_content = f"Translate the following text from {src_lang_name} to {tgt_lang_name}:\n\n{source_text}\n\nTranslation:"
                 gt = target_text
                 
                 # For translation, use chat template for better instruction following
-                m = [
-                    {"role": "user", "content": prompt},
+                messages = [
+                    {"role": "user", "content": prompt_content},
                 ]
-                prompt = tokenizer.apply_chat_template(
-                    m, add_generation_prompt=True, tokenize=False
+                inputs = tokenizer.apply_chat_template(
+                    messages, return_tensors="pt", return_dict=True, add_generation_prompt=True
                 )
-                
-                # Tokenize the prompt
-                input_ids = tokenizer(prompt)["input_ids"]
-                input_ids = torch.tensor(input_ids).to(device).unsqueeze(0)
+                input_ids = inputs.input_ids.to(device)
+                attention_mask = inputs.attention_mask.to(device)
+                prompt = tokenizer.decode(input_ids[0], skip_special_tokens=False)
                 
             else:
                 # Handle QA-based datasets (like ELI5)
@@ -332,61 +364,65 @@ def run_generation(
                     print(f"Dataset exhausted at index {dataset_idx}.")
                     break
                     
-                prompt = dataset[dataset_idx]["question"]
+                question = dataset[dataset_idx]["question"]
                 gt = dataset[dataset_idx]["answer"]
-                m = [
-                    {"role": "user", "content": prompt},
+                messages = [
+                    {"role": "user", "content": question},
                 ]
-                prompt = tokenizer.apply_chat_template(
-                    m, add_generation_prompt=True, tokenize=False
+                inputs = tokenizer.apply_chat_template(
+                    messages, return_tensors="pt", return_dict=True, add_generation_prompt=True
                 )
-                input_ids = tokenizer(prompt)["input_ids"]
-                input_ids = torch.tensor(input_ids).to(device).unsqueeze(0)
+                input_ids = inputs.input_ids.to(device)
+                attention_mask = inputs.attention_mask.to(device)
+                prompt = tokenizer.decode(input_ids[0], skip_special_tokens=False)
                 dataset_idx += 1
 
-            if (
-                watermark_config.strategy == "legacy-ahead"
-                or watermark_config.strategy == "legacy-both"
-            ):
-                out = generate_LLaDA(
-                    model,
-                    input_ids,
-                    steps=gen_config.steps,
-                    gen_length=gen_config.gen_length,
-                    block_length=gen_config.block_length,
-                    temperature=gen_config.temperature,
-                    cfg_scale=gen_config.cfg_scale,
-                    remasking=gen_config.remasking,
-                    watermark_config=watermark.watermark_config if watermark else None,
-                )
-            else:
-                out = generate(
-                    model,
-                    input_ids,
-                    steps=gen_config.steps,
-                    gen_length=gen_config.gen_length,
-                    block_length=gen_config.block_length,
-                    temperature=gen_config.temperature,
-                    cfg_scale=gen_config.cfg_scale,
-                    remasking=gen_config.remasking,
-                    watermark=watermark,
-                )
-
-            output_ids = out[:, input_ids.shape[1] :][0]
+            # Generate using DREAM's diffusion_generate method
+            generation_kwargs = {
+                "max_new_tokens": gen_config.gen_length,
+                "output_history": gen_config.output_history,
+                "return_dict_in_generate": gen_config.return_dict_in_generate,
+                "steps": gen_config.steps,
+                "temperature": gen_config.temperature,
+                "top_p": gen_config.top_p,
+                "alg": gen_config.alg,
+                "alg_temp": gen_config.alg_temp,
+                "eps": gen_config.eps,
+            }
             
-            # Trim output_ids at first occurrence of special tokens (126081 or 126348)
+            if gen_config.top_k is not None:
+                generation_kwargs["top_k"] = gen_config.top_k
+            
+            # Add watermark if using custom generation
+            if use_custom_generation and watermark is not None:
+                generation_kwargs["watermark"] = watermark
+                
+            output = model.diffusion_generate(
+                input_ids,
+                attention_mask=attention_mask,
+                **generation_kwargs
+            )
+
+            # Extract generated tokens
+            if gen_config.return_dict_in_generate:
+                output_ids = output.sequences[0, input_ids.shape[1]:]
+            else:
+                output_ids = output[0, input_ids.shape[1]:]
+            
+            # Trim output_ids at first occurrence of EOS token
             trimmed_length = len(output_ids)
-            for i, curr_token in enumerate(output_ids):
-                if curr_token == 126081 or curr_token == 126348:
-                    trimmed_length = i
-                    break
+            if tokenizer.eos_token_id is not None:
+                for i, curr_token in enumerate(output_ids):
+                    if curr_token == tokenizer.eos_token_id:
+                        trimmed_length = i
+                        break
             output_ids = output_ids[:trimmed_length]
             
             # Decode the trimmed output_ids
             if trimmed_length > 0:
-                output = tokenizer.decode(output_ids, skip_special_tokens=True)
+                output_text = tokenizer.decode(output_ids, skip_special_tokens=True)
             else:
-                output = ""
+                output_text = ""
             
             # Check if output meets minimum token requirement
             num_output_tokens = output_ids.shape[0]
@@ -397,7 +433,7 @@ def run_generation(
                         {
                             "prompt": prompt,
                             "ground_truth": gt,
-                            "output": output,
+                            "output": output_text,
                             "output_ids": output_ids.tolist(),
                             "num_output_tokens": num_output_tokens,
                         },

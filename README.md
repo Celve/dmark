@@ -34,7 +34,7 @@ This creates a bitmap file named `bitmap_v{vocab_size}_r{ratio}_k{key}.bin`.
 
 ```bash
 # Basic generation with watermark
-python -m dmark.llada.gen \
+python -m dmark.llada.gen_llada \
     --model GSAI-ML/LLaDA-8B-Instruct \
     --dataset sentence-transformers/eli5 \
     --num_samples 100 \
@@ -44,12 +44,87 @@ python -m dmark.llada.gen \
     --delta 2.0
 
 # Generation without watermark (baseline)
-python -m dmark.llada.gen \
+python -m dmark.llada.gen_llada \
     --model GSAI-ML/LLaDA-8B-Instruct \
     --dataset sentence-transformers/eli5 \
     --num_samples 100 \
     --gen_length 256
 ```
+
+## Supported Datasets
+
+DMark supports multiple dataset formats for watermark generation experiments:
+
+### 1. Question-Answering Datasets (Default)
+
+**Example**: `sentence-transformers/eli5`
+
+**Usage**: Questions are used as prompts with chat template formatting, answers serve as ground truth reference.
+
+```bash
+python -m dmark.llada.only_gen \
+    --dataset sentence-transformers/eli5 \
+    --num_samples 100 \
+    --gen_length 256
+```
+
+### 2. C4 Dataset (Text Completion)
+
+**Dataset**: `allenai/c4`
+
+**Usage**: First 30 tokens from C4 text serve as prompts, next `gen_length` tokens (e.g., 200) serve as non-watermarked ground truth. The model generates `gen_length` tokens to complete the text.
+
+```bash
+python -m dmark.llada.only_gen \
+    --dataset allenai/c4 \
+    --num_samples 100 \
+    --gen_length 200  # Will use tokens 30-230 as ground truth
+```
+
+**Note**: Uses streaming mode for memory efficiency. Texts shorter than 30 + `gen_length` tokens are automatically skipped.
+
+### 3. HumanEval (Code Generation)
+
+**Dataset**: `openai/openai_humaneval`
+
+**Usage**: Function signatures with docstrings serve as prompts. The model generates code completions. Canonical solutions are stored as reference but not used for constraining generation.
+
+```bash
+python -m dmark.llada.only_gen \
+    --dataset openai/openai_humaneval \
+    --num_samples 100 \
+    --gen_length 256
+```
+
+**Note**: Contains 164 programming problems. Uses test split only.
+
+### 4. WMT16 (Machine Translation)
+
+**Dataset**: `wmt16:lang_pair` where lang_pair is one of: `cs-en`, `de-en`, `fi-en`, `ro-en`, `ru-en`, `tr-en`
+
+**Usage**: Source language text serves as prompt, target language translation as ground truth reference. The model generates translations.
+
+```bash
+# German to English translation
+python -m dmark.llada.only_gen \
+    --dataset wmt16:de-en \
+    --num_samples 100 \
+    --gen_length 256
+
+# Russian to English translation
+python -m dmark.llada.only_gen \
+    --dataset wmt16:ru-en \
+    --num_samples 100 \
+    --gen_length 256
+```
+
+### Dataset Format Detection
+
+The system automatically detects dataset format based on the dataset name:
+- `allenai/c4` → Text completion mode
+- `openai/openai_humaneval` → Code generation mode
+- `wmt16:*` → Translation mode
+- Others → Question-answering mode (default)
 
 ## Evaluation Scripts
 

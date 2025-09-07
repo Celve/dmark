@@ -1,5 +1,5 @@
 from typing import Any
-from dmark.llada.gen import run_generation, parse_args
+from dmark.llada.gen_llada import run_generation, parse_args
 import os
 import numpy as np
 import argparse

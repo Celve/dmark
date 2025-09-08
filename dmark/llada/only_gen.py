@@ -273,7 +273,7 @@ def run_generation(
                 gt = sample["canonical_solution"]
                 
                 # Create instruction prompt for code completion
-                prompt = f"Complete the following Python function:\n\n{code_prompt}"
+                prompt = f"Provide only the code implementation without any explanation or additional text. Start your response directly with the code.\n\nComplete the following Python function:\n\n{code_prompt}"
                 
                 # For code generation, use chat template for better instruction following
                 m = [

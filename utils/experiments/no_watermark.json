@@ -1,0 +1,21 @@
+{
+    "name": "baseline_no_watermark",
+    "description": "Baseline LLaDA experiments without watermarking",
+    "base_command": "python -m dmark.llada.only_gen",
+    "fixed_params": {
+        "model": "GSAI-ML/LLaDA-8B-Instruct",
+        "output_dir": "results/llada/baseline",
+        "vocab_size": 126464,
+        "num_samples": 1000,
+        "minimum_output_token": 200,
+        "steps": 256,
+        "gen_length": 256,
+        "block_length": 32,
+        "cfg_scale": 0.0,
+        "remasking": "low_confidence",
+        "temperature": 0.0
+    },
+    "variable_params": {
+        "dataset": ["sentence-transformers/eli5", "allenai/c4", "openai/openai_humaneval", "wmt16:cs-en"]
+    }
+}

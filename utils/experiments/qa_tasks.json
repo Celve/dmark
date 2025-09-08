@@ -1,0 +1,27 @@
+{
+    "name": "all_watermark",
+    "description": "Test different watermark strength (delta) values",
+    "base_command": "python -m dmark.llada.only_gen",
+    "fixed_params": {
+        "model": "GSAI-ML/LLaDA-8B-Instruct",
+        "output_dir": "results/llada/watermark_strength",
+        "vocab_size": 126464,
+        "num_samples": 500,
+        "bitmap_dir": ".",
+        "steps": 256,
+        "gen_length": 256,
+        "block_length": 32,
+        "temperature": 0.0,
+        "cfg_scale": 0.0,
+        "ratio": 0.5,
+        "key": 42,
+        "prebias": false,
+        "minimum_output_token": 200
+    },
+    "variable_params": {
+        "dataset": ["sentence-transformers/eli5"],
+        "delta": [1.0, 2.0, 5.0, 10.0],
+        "remasking": ["low_confidence", "random", "right_to_left", "left_to_right"],
+        "strategy": ["normal", "predict", "reverse"]
+    }
+}

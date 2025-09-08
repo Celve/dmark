@@ -7,7 +7,7 @@
         "output_dir": "results/llada/qa_watermark",
         "vocab_size": 126464,
         "num_samples": 500,
-        "bitmap_dir": ".",
+        "bitmap_dir": "bitmaps",
         "steps": 256,
         "gen_length": 256,
         "block_length": 32,

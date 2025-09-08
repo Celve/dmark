@@ -18,7 +18,7 @@
         "key": 42,
         "prebias": false,
         "minimum_output_token": 200,
-        "bitmap_dir": "."
+        "bitmap_dir": "bitmaps"
     },
     "variable_params": {
         "ratio": [0.25, 0.5, 0.75],

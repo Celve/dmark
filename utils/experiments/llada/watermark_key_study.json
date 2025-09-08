@@ -1,0 +1,26 @@
+{
+    "name": "watermark_key_study",
+    "description": "Study effect of different hash keys on watermark performance",
+    "base_command": "python -m dmark.llada.only_gen",
+    "fixed_params": {
+        "model": "GSAI-ML/LLaDA-8B-Instruct",
+        "dataset": "sentence-transformers/eli5",
+        "output_dir": "results/llada/key_study",
+        "vocab_size": 126464,
+        "num_samples": 100,
+        "minimum_output_token": 200,
+        "steps": 256,
+        "gen_length": 256,
+        "block_length": 32,
+        "cfg_scale": 0.0,
+        "remasking": "low_confidence",
+        "temperature": 0.0,
+        "strategy": "normal",
+        "ratio": 0.5,
+        "delta": 2.0,
+        "bitmap_dir": "bitmaps"
+    },
+    "variable_params": {
+        "key": [42, 100, 200, 500, 1000, 2024, 9999]
+    }
+}

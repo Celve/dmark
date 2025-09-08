@@ -1,6 +1,6 @@
 # DMark - Diffusion LLM Watermarking System
 
-DMark is a watermarking system for diffusion-based large language models (DLLMs) that implements LLaDA-based generation with watermark injection and detection capabilities.
+DMark is a watermarking system for diffusion-based large language models (DLLMs) that implements LLaDA-based generation with watermark injection and detection capabilities. The system supports both LLaDA and DREAM models for watermarked text generation.
 
 ## Installation
 
@@ -28,27 +28,57 @@ python -m dmark.watermark.preprocess \
     --key 42
 ```
 
-This creates a bitmap file named `bitmap_v{vocab_size}_r{ratio}_k{key}.bin`.
+This creates a bitmap file named `bitmap_v{vocab_size}_r{ratio*100}_k{key}.bin` (e.g., `bitmap_v126464_r50_k42.bin`).
 
 ### 2. Generate Watermarked Text
 
+#### Using LLaDA Model
+
 ```bash
 # Basic generation with watermark
-python -m dmark.llada.gen_llada \
+python -m dmark.llada.only_gen \
     --model GSAI-ML/LLaDA-8B-Instruct \
     --dataset sentence-transformers/eli5 \
     --num_samples 100 \
     --gen_length 256 \
     --strategy reverse \
     --bitmap bitmaps/bitmap_v126464_r50_k42.bin \
-    --delta 2.0
+    --delta 2.0 \
+    --minimum_output_token 200
 
 # Generation without watermark (baseline)
-python -m dmark.llada.gen_llada \
+python -m dmark.llada.only_gen \
     --model GSAI-ML/LLaDA-8B-Instruct \
     --dataset sentence-transformers/eli5 \
     --num_samples 100 \
     --gen_length 256
+```
+
+#### Using DREAM Model
+
+```bash
+# DREAM model with watermark
+python -m dmark.llada.only_gen_dream \
+    --model Dream-org/Dream-v0-Instruct-7B \
+    --dataset sentence-transformers/eli5 \
+    --num_samples 100 \
+    --gen_length 256 \
+    --steps 512 \
+    --temperature 0.2 \
+    --alg entropy \
+    --top_p 0.95 \
+    --strategy normal \
+    --bitmap bitmaps/bitmap_v126464_r50_k42.bin \
+    --delta 2.0
+
+# DREAM model without watermark
+python -m dmark.llada.only_gen_dream \
+    --model Dream-org/Dream-v0-Instruct-7B \
+    --dataset sentence-transformers/eli5 \
+    --num_samples 100 \
+    --gen_length 256 \
+    --steps 512 \
+    --alg entropy
 ```
 
 ## Supported Datasets
@@ -231,6 +261,135 @@ python -m dmark.eval.log_diversity --input results/
 # 4. Results will have all metrics in the JSON files
 ```
 
+## Experiment Generation System
+
+The `utils/generate_experiments.py` script automates the creation of experiment scripts from JSON configuration files.
+
+### Configuration Files
+
+Pre-configured experiment templates are available in `utils/experiments/llada/`:
+
+- `baseline_no_watermark.json` - Baseline experiments without watermarking
+- `qa_watermark_strategies.json` - QA tasks with different watermarking strategies
+- `text_watermark_strategies.json` - Text generation (C4) experiments
+- `code_watermark_strategies.json` - Code generation (HumanEval) experiments
+- `translation_watermark_strategies.json` - Translation (WMT16) experiments
+- `watermark_ratio_study.json` - Study different green list ratios
+- `watermark_key_study.json` - Study different hash keys
+
+### Basic Usage
+
+```bash
+# Generate experiment script from configuration
+python utils/generate_experiments.py utils/experiments/llada/baseline_no_watermark.json
+
+# This creates: run_baseline_no_watermark.sh
+./run_baseline_no_watermark.sh
+```
+
+### Advanced Features
+
+#### 1. Split Experiments Across Multiple Scripts
+
+Split large experiments into N independent scripts for parallel execution:
+
+```bash
+# Split into 4 separate scripts
+python utils/generate_experiments.py \
+    utils/experiments/llada/qa_watermark_strategies.json \
+    --split 4
+
+# Creates:
+# - run_qa_watermark_strategies_part1_of_4.sh
+# - run_qa_watermark_strategies_part2_of_4.sh
+# - run_qa_watermark_strategies_part3_of_4.sh
+# - run_qa_watermark_strategies_part4_of_4.sh
+
+# Run in parallel (different terminals/machines)
+./run_qa_watermark_strategies_part1_of_4.sh  # Terminal 1
+./run_qa_watermark_strategies_part2_of_4.sh  # Terminal 2
+./run_qa_watermark_strategies_part3_of_4.sh  # Terminal 3
+./run_qa_watermark_strategies_part4_of_4.sh  # Terminal 4
+```
+
+#### 2. Preview Commands (Dry Run)
+
+```bash
+# Preview generated commands without creating script
+python utils/generate_experiments.py \
+    utils/experiments/llada/watermark_ratio_study.json \
+    --dry-run
+
+# Preview with splitting
+python utils/generate_experiments.py \
+    utils/experiments/llada/watermark_ratio_study.json \
+    --split 3 \
+    --dry-run
+```
+
+#### 3. Custom Output Files
+
+```bash
+# Specify custom output filename
+python utils/generate_experiments.py \
+    utils/experiments/llada/code_watermark_strategies.json \
+    --output my_code_experiments.sh
+```
+
+#### 4. Limit Number of Experiments
+
+```bash
+# Generate only first 10 experiments (useful for testing)
+python utils/generate_experiments.py \
+    utils/experiments/llada/text_watermark_strategies.json \
+    --max-commands 10
+```
+
+### Creating Custom Experiment Configurations
+
+Create a JSON file with the following structure:
+
+```json
+{
+    "name": "my_experiment",
+    "description": "Description of the experiment",
+    "base_command": "python -m dmark.llada.only_gen",
+    "fixed_params": {
+        "model": "GSAI-ML/LLaDA-8B-Instruct",
+        "output_dir": "results/my_experiment",
+        "vocab_size": 126464,
+        "num_samples": 500,
+        "steps": 256,
+        "gen_length": 256,
+        "bitmap_dir": "."
+    },
+    "variable_params": {
+        "dataset": ["sentence-transformers/eli5", "allenai/c4"],
+        "strategy": ["normal", "predict", "reverse"],
+        "delta": [1.0, 2.0, 5.0]
+    }
+}
+```
+
+The script will generate all combinations of variable parameters (2 × 3 × 3 = 18 experiments in this example).
+
+### Automatic Bitmap Naming
+
+The experiment generator automatically constructs bitmap filenames based on `vocab_size`, `ratio`, and `key`:
+
+```json
+{
+    "fixed_params": {
+        "vocab_size": 126464,
+        "ratio": 0.5,
+        "key": 42,
+        "bitmap_dir": "bitmaps"
+    }
+}
+```
+
+This automatically generates: `--bitmap bitmaps/bitmap_v126464_r50_k42.bin`
+
 ## Analysis Scripts
 
 The `dmark/analysis` directory contains scripts for analyzing watermark detection thresholds.
@@ -379,18 +538,58 @@ All scripts save results in JSON format with the following structure:
 }
 ```
 
+## Generation Parameters
+
+### Minimum Output Token
+
+The `--minimum_output_token` parameter filters out samples with insufficient output length:
+
+```bash
+# Only keep samples with at least 200 output tokens
+python -m dmark.llada.only_gen \
+    --dataset sentence-transformers/eli5 \
+    --num_samples 1000 \
+    --gen_length 256 \
+    --minimum_output_token 200 \
+    --output_dir results/
+```
+
+This ensures high-quality samples for watermark detection analysis by excluding truncated or incomplete generations.
+
 ## Watermarking Strategies
 
 - **normal**: Basic watermark based on previous token (i-1)
 - **predict**: Uses predicted tokens for watermarking
 - **reverse**: Bidirectional watermarking using both previous and next tokens
+- **legacy-ahead**: Legacy compatibility mode (ahead prediction)
+- **legacy-both**: Legacy compatibility mode (bidirectional)
 
-## Remasking Strategies
+## Generation Strategies
 
-- **low_confidence**: Remask tokens with lowest confidence scores
-- **random**: Randomly assign confidence scores
-- **right_to_left**: Remask from right to left (rightmost tokens first)
-- **left_to_right**: Remask from left to right (leftmost tokens first)
+### LLaDA Model Parameters
+
+- **steps**: Number of denoising steps (default: 256)
+- **block_length**: Block size for semi-autoregressive generation (default: 32)
+- **temperature**: Sampling temperature (0.0 for greedy)
+- **cfg_scale**: Classifier-free guidance scale
+- **remasking**: Strategy for remasking tokens
+  - **low_confidence**: Remask tokens with lowest confidence scores
+  - **random**: Randomly assign confidence scores
+  - **right_to_left**: Remask from right to left (rightmost tokens first)
+  - **left_to_right**: Remask from left to right (leftmost tokens first)
+
+### DREAM Model Parameters
+
+- **steps**: Number of diffusion steps (default: 512)
+- **alg**: Sampling algorithm
+  - **origin**: Original DREAM sampling
+  - **maskgit_plus**: MaskGIT+ algorithm
+  - **topk_margin**: Top-k margin confidence
+  - **entropy**: Entropy-based sampling
+- **alg_temp**: Algorithm temperature
+- **top_p**: Top-p (nucleus) sampling
+- **top_k**: Top-k sampling
+- **eps**: Epsilon for numerical stability
 
 ## Tips
 

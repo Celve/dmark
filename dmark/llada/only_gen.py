@@ -192,6 +192,11 @@ def run_generation(
         use_streaming = False
         # Parse source and target languages
         src_lang, tgt_lang = lang_pair.split("-")
+    elif gen_config.dataset == "gsm8k" or gen_config.dataset == "openai/gsm8k":
+        # Load GSM8K dataset (math problems)
+        dataset = load_dataset("gsm8k", "main", split="train")
+        dataset_format = "math"  # GSM8K has question/answer fields for math problems
+        use_streaming = False
     else:
         dataset = load_dataset(gen_config.dataset, split="train")
         dataset_format = "qa"  # Default format with question/answer fields
@@ -325,6 +330,42 @@ def run_generation(
                 # Tokenize the prompt
                 input_ids = tokenizer(prompt)["input_ids"]
                 input_ids = torch.tensor(input_ids).to(device).unsqueeze(0)
+                
+            elif dataset_format == "math":
+                # Handle math datasets (like GSM8K)
+                if dataset_idx >= len(dataset):
+                    print(f"Dataset exhausted at index {dataset_idx}.")
+                    break
+                
+                question = dataset[dataset_idx]["question"]
+                gt = dataset[dataset_idx]["answer"]
+                
+                # Create instruction prompt for math problem solving
+                prompt = (
+                    "You are a math expert. You will be given a question to solve. "
+                    "Solve it step by step. Wrap the final answer in a \\boxed{{}}.\n"
+                    "Respond in the following format:\n"
+                    "<reasoning>\n"
+                    "Your reasoning here\n"
+                    "</reasoning>\n"
+                    "<answer>\n"
+                    "\\boxed{...}\n"
+                    "</answer>"
+                )
+                prompt = f"{prompt}\n\n{question}"
+                
+                # Use chat template for better instruction following
+                m = [
+                    {"role": "user", "content": prompt},
+                ]
+                prompt = tokenizer.apply_chat_template(
+                    m, add_generation_prompt=True, tokenize=False
+                )
+                
+                # Tokenize the prompt
+                input_ids = tokenizer(prompt)["input_ids"]
+                input_ids = torch.tensor(input_ids).to(device).unsqueeze(0)
+                dataset_idx += 1
                 
             else:
                 # Handle QA-based datasets (like ELI5)

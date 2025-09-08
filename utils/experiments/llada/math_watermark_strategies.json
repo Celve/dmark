@@ -1,0 +1,26 @@
+{
+    "name": "math_watermark_strategies",
+    "description": "Math problem solving (GSM8K) with different watermark strategies",
+    "base_command": "python -m dmark.llada.only_gen",
+    "fixed_params": {
+        "model": "GSAI-ML/LLaDA-8B-Instruct",
+        "dataset": "openai/gsm8k",
+        "output_dir": "results/llada/math",
+        "vocab_size": 126464,
+        "num_samples": 100,
+        "minimum_output_token": 200,
+        "steps": 256,
+        "gen_length": 256,
+        "block_length": 32,
+        "cfg_scale": 0.0,
+        "remasking": "low_confidence",
+        "temperature": 0.0,
+        "ratio": 0.5,
+        "delta": 2.0,
+        "key": 42,
+        "bitmap_dir": "bitmaps"
+    },
+    "variable_params": {
+        "strategy": ["normal", "predict", "reverse"]
+    }
+}

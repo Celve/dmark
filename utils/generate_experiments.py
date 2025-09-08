@@ -182,6 +182,12 @@ def main():
         help="Maximum number of commands to generate"
     )
     parser.add_argument(
+        "--split",
+        type=int,
+        default=None,
+        help="Split commands into N separate script files"
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print commands without saving to file"
@@ -232,32 +238,93 @@ def main():
     # Print or save commands
     if args.dry_run:
         print("\n=== Generated Commands ===")
-        for i, cmd in enumerate(commands[:10], 1):
-            print(f"{i}. {cmd}")
-        if len(commands) > 10:
-            print(f"... and {len(commands) - 10} more commands")
-    else:
-        # Determine output file
-        if args.output:
-            output_file = args.output
+        if args.split:
+            # Show how commands would be split
+            import math
+            chunk_size = math.ceil(len(commands) / args.split)
+            for group in range(args.split):
+                start = group * chunk_size
+                end = min(start + chunk_size, len(commands))
+                print(f"\n--- Group {group + 1}/{args.split} ({end - start} commands) ---")
+                for i, cmd in enumerate(commands[start:min(start + 3, end)], start + 1):
+                    print(f"{i}. {cmd}")
+                if end - start > 3:
+                    print(f"... and {end - start - 3} more commands in this group")
         else:
-            # Use experiment name if available, otherwise use config filename
-            if experiment_name:
-                output_file = f"run_{experiment_name}.sh"
+            for i, cmd in enumerate(commands[:10], 1):
+                print(f"{i}. {cmd}")
+            if len(commands) > 10:
+                print(f"... and {len(commands) - 10} more commands")
+    else:
+        # Handle splitting into multiple files
+        if args.split and args.split > 1:
+            import math
+            chunk_size = math.ceil(len(commands) / args.split)
+            
+            # Generate base filename
+            if args.output:
+                base_name = args.output.replace('.sh', '')
             else:
-                config_name = Path(args.config).stem
-                output_file = f"run_{config_name}.sh"
-        
-        # Save to file
-        save_bash_script(
-            commands,
-            output_file,
-            description=description
-        )
-        
-        print(f"\nSaved {len(commands)} commands to: {output_file}")
-        print(f"To run experiments:")
-        print(f"  ./{output_file}")
+                if experiment_name:
+                    base_name = f"run_{experiment_name}"
+                else:
+                    config_name = Path(args.config).stem
+                    base_name = f"run_{config_name}"
+            
+            print(f"\nSplitting {len(commands)} commands into {args.split} script files")
+            print(f"Each script will have approximately {chunk_size} commands\n")
+            
+            # Create split script files
+            for group in range(args.split):
+                start = group * chunk_size
+                end = min(start + chunk_size, len(commands))
+                group_commands = commands[start:end]
+                
+                # Generate filename for this group
+                output_file = f"{base_name}_part{group + 1}_of_{args.split}.sh"
+                
+                # Add group info to description
+                group_description = f"{description} (Part {group + 1}/{args.split})"
+                
+                # Save this group's commands
+                save_bash_script(
+                    group_commands,
+                    output_file,
+                    description=group_description
+                )
+                
+                print(f"Saved {len(group_commands)} commands to: {output_file}")
+            
+            print(f"\nTo run experiments:")
+            print(f"  # Run all parts in parallel (in different terminals):")
+            for group in range(args.split):
+                output_file = f"{base_name}_part{group + 1}_of_{args.split}.sh"
+                print(f"  ./{output_file}")
+            print(f"\n  # Or run them sequentially:")
+            print(f"  for i in {base_name}_part*_of_{args.split}.sh; do ./$i; done")
+            
+        else:
+            # Single file output (original behavior)
+            if args.output:
+                output_file = args.output
+            else:
+                # Use experiment name if available, otherwise use config filename
+                if experiment_name:
+                    output_file = f"run_{experiment_name}.sh"
+                else:
+                    config_name = Path(args.config).stem
+                    output_file = f"run_{config_name}.sh"
+            
+            # Save to file
+            save_bash_script(
+                commands,
+                output_file,
+                description=description
+            )
+            
+            print(f"\nSaved {len(commands)} commands to: {output_file}")
+            print(f"To run experiments:")
+            print(f"  ./{output_file}")
 
 
 if __name__ == "__main__":

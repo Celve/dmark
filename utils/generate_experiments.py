@@ -265,11 +265,15 @@ def main():
             if args.output:
                 base_name = args.output.replace('.sh', '')
             else:
+                # Create scripts directory if it doesn't exist
+                scripts_dir = Path("scripts")
+                scripts_dir.mkdir(exist_ok=True)
+                
                 if experiment_name:
-                    base_name = f"run_{experiment_name}"
+                    base_name = str(scripts_dir / f"run_{experiment_name}")
                 else:
                     config_name = Path(args.config).stem
-                    base_name = f"run_{config_name}"
+                    base_name = str(scripts_dir / f"run_{config_name}")
             
             print(f"\nSplitting {len(commands)} commands into {args.split} script files")
             print(f"Each script will have approximately {chunk_size} commands\n")
@@ -308,12 +312,18 @@ def main():
             if args.output:
                 output_file = args.output
             else:
+                # Create scripts directory if it doesn't exist
+                scripts_dir = Path("scripts")
+                scripts_dir.mkdir(exist_ok=True)
+                
                 # Use experiment name if available, otherwise use config filename
                 if experiment_name:
-                    output_file = f"run_{experiment_name}.sh"
+                    output_file = scripts_dir / f"run_{experiment_name}.sh"
                 else:
                     config_name = Path(args.config).stem
-                    output_file = f"run_{config_name}.sh"
+                    output_file = scripts_dir / f"run_{config_name}.sh"
+                
+                output_file = str(output_file)
             
             # Save to file
             save_bash_script(

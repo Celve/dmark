@@ -71,3 +71,6 @@ temp/
 
 # Claude
 CLAUDE.md
+
+# Scripts used for experiments
+scripts/

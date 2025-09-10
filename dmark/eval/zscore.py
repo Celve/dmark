@@ -160,7 +160,13 @@ def main():
         "--output",
         type=str,
         default=None,
-        help="Directory to save output files (default: same as input)"
+        help="Output directory path (default: {input_dir}_zscore for directories, same dir for files)"
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        default="zscore",
+        help="Tag to append to output files/directory (default: zscore)"
     )
     parser.add_argument(
         "--bitmap",
@@ -188,40 +194,52 @@ def main():
         print(f"Error: Input path '{args.input}' not found")
         return
     
-    # Create output directory if specified
-    if args.output:
-        os.makedirs(args.output, exist_ok=True)
-    
-    # Determine if input is a file or directory
-    if os.path.isfile(args.input):
-        # Process single file
+    # Determine output directory based on input type
+    if os.path.isdir(args.input):
+        # Input is directory
         if args.output:
-            base_name = os.path.basename(args.input).replace(".json", "_zscore.json")
-            output_file = os.path.join(args.output, base_name)
+            output_dir = args.output
         else:
-            output_file = args.input.replace(".json", "_zscore.json")
-        process_json_file(args.input, output_file, args.bitmap, args.model, args.max_tokens)
-    elif os.path.isdir(args.input):
-        # Process all JSON files in directory
-        json_files = [f for f in os.listdir(args.input) if f.endswith('.json') and not f.endswith('_zscore.json')]
+            # Default: {input_dir}_{tag}
+            input_dirname = os.path.basename(os.path.normpath(args.input))
+            parent_dir = os.path.dirname(os.path.normpath(args.input))
+            output_dir = os.path.join(parent_dir, f"{input_dirname}_{args.tag}")
+        
+        # Create output directory
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Process all JSON files in directory (excluding already tagged files)
+        tag_suffix = f"_{args.tag}.json"
+        json_files = [f for f in os.listdir(args.input) 
+                     if f.endswith('.json') and not f.endswith(tag_suffix)]
         
         if not json_files:
             print(f"No JSON files found in directory: {args.input}")
             return
         
         print(f"Found {len(json_files)} JSON files to process")
+        print(f"Output directory: {output_dir}")
         
         for json_file in json_files:
             input_path = os.path.join(args.input, json_file)
-            
-            if args.output:
-                output_name = json_file.replace(".json", "_zscore.json")
-                output_path = os.path.join(args.output, output_name)
-            else:
-                output_path = input_path.replace(".json", "_zscore.json")
+            output_name = json_file.replace(".json", f"_{args.tag}.json")
+            output_path = os.path.join(output_dir, output_name)
             
             print(f"\nProcessing: {json_file}")
             process_json_file(input_path, output_path, args.bitmap, args.model, args.max_tokens)
+            
+    elif os.path.isfile(args.input):
+        # Input is a file
+        if args.output:
+            # Save to specified output directory
+            os.makedirs(args.output, exist_ok=True)
+            base_name = os.path.basename(args.input).replace(".json", f"_{args.tag}.json")
+            output_file = os.path.join(args.output, base_name)
+        else:
+            # Save alongside input file with tag
+            output_file = args.input.replace(".json", f"_{args.tag}.json")
+        
+        process_json_file(args.input, output_file, args.bitmap, args.model, args.max_tokens)
     else:
         print(f"Error: '{args.input}' is neither a file nor a directory")
         return

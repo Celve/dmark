@@ -41,46 +41,27 @@ class PPLCalculator:
 def process_json_file(
     input_file: str,
     output_file: str,
-    model_name: str = "meta-llama/Meta-Llama-3-8B-Instruct",
-    device: str = "cuda"
+    ppl_calculator: PPLCalculator
 ) -> None:
     """Process a JSON file containing generation results and add perplexity scores.
     
     Args:
         input_file: Path to input JSON file
         output_file: Path to output JSON file
-        model_name: Model name for perplexity calculation
-        device: Device to run model on
+        ppl_calculator: PPLCalculator instance for perplexity calculation
     """
-    # Check if CUDA is available
-    if device == "cuda" and not torch.cuda.is_available():
-        print("CUDA not available, using CPU instead")
-        device = "cpu"
-    
     # Load the JSON data
     with open(input_file, 'r') as f:
         results = json.load(f)
     
-    # Initialize model and tokenizer
-    print(f"Loading model: {model_name}")
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-        device_map="auto" if device == "cuda" else None,
-        trust_remote_code=True,
-    ).to(device)
-    model.eval()
-    
-    # Initialize PPL calculator
-    ppl_calculator = PPLCalculator(model, tokenizer, device)
-    
     # Process each result
     for result in tqdm(results, desc="Calculating perplexity"):
+        if "data" not in result:
+            continue
         prompt = result["data"]["prompt"]
         output = result["data"]["output"]
         full_text = prompt + output
-        full_ids = tokenizer(full_text, add_special_tokens=False).input_ids
+        full_ids = ppl_calculator.tokenizer(full_text, add_special_tokens=False).input_ids
         perplexity = ppl_calculator.analyze_tokens(full_ids)
         
         # Add perplexity to result under text_quality
@@ -143,6 +124,26 @@ def main():
     if args.output:
         os.makedirs(args.output, exist_ok=True)
     
+    # Check if CUDA is available
+    device = args.device
+    if device == "cuda" and not torch.cuda.is_available():
+        print("CUDA not available, using CPU instead")
+        device = "cpu"
+    
+    # Initialize model and tokenizer once
+    print(f"Loading model: {args.model}")
+    tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
+    model = AutoModelForCausalLM.from_pretrained(
+        args.model,
+        torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+        device_map="auto" if device == "cuda" else None,
+        trust_remote_code=True,
+    ).to(device)
+    model.eval()
+    
+    # Initialize PPL calculator once
+    ppl_calculator = PPLCalculator(model, tokenizer, device)
+    
     # Determine if input is a file or directory
     if os.path.isfile(args.input):
         # Process single file
@@ -151,7 +152,7 @@ def main():
             output_file = os.path.join(args.output, base_name)
         else:
             output_file = args.input.replace(".json", "_ppl.json")
-        process_json_file(args.input, output_file, args.model, args.device)
+        process_json_file(args.input, output_file, ppl_calculator)
     elif os.path.isdir(args.input):
         # Process all JSON files in directory
         json_files = [f for f in os.listdir(args.input) if f.endswith('.json') and not f.endswith('_ppl.json')]
@@ -172,7 +173,7 @@ def main():
                 output_path = input_path.replace(".json", "_ppl.json")
             
             print(f"\nProcessing: {json_file}")
-            process_json_file(input_path, output_path, args.model, args.device)
+            process_json_file(input_path, output_path, ppl_calculator)
     else:
         print(f"Error: '{args.input}' is neither a file nor a directory")
         return

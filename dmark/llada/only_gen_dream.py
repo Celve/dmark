@@ -69,7 +69,7 @@ def parse_args():
     # even though many of them have default values, the watermark will only be enabled if the strategy is not None
     parser.add_argument("--strategy", type=str, default=None, choices=["normal", "predict", "reverse"])
     parser.add_argument("--bitmap", type=str, default="bitmap.bin")
-    parser.add_argument("--vocab_size", type=int, default=126464)
+    parser.add_argument("--vocab_size", type=int, default=152064)
     parser.add_argument("--ratio", type=float, default=0.5)
     parser.add_argument("--delta", type=float, default=2.0)
     parser.add_argument("--key", type=int, default=42)
@@ -163,7 +163,7 @@ def generate_result_filename(
             components.append("prebias")
         
         # Add vocab size if not default
-        if watermark_config.vocab_size != 126464:
+        if watermark_config.vocab_size != 152064:
             components.append(f"v{watermark_config.vocab_size}")
     else:
         components.append("nowm")

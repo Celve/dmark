@@ -182,17 +182,21 @@ def process_single_file(file_path: str, target_tprs: List[float] = [0.90, 0.95, 
     }
 
 
-def save_csv_results(all_results: List[Dict], output_dir: str, target_tprs: List[float]) -> None:
+def save_csv_results(all_results: List[Dict], input_dir: str, output_dir: str, target_tprs: List[float]) -> None:
     """
     Save threshold analysis results to CSV files.
     
     Args:
         all_results: List of analysis results from each file
+        input_dir: Directory containing input files (used for naming)
         output_dir: Directory to save CSV files
         target_tprs: List of target true positive rates
     """
+    # Use input directory name as base for CSV filenames
+    dir_name = os.path.basename(os.path.normpath(input_dir))
+    
     # Per-file CSV with thresholds
-    csv_path = os.path.join(output_dir, 'threshold_analysis_per_file.csv')
+    csv_path = os.path.join(output_dir, f'{dir_name}_threshold_analysis_per_file.csv')
     
     # Prepare CSV headers
     headers = [
@@ -250,7 +254,7 @@ def save_csv_results(all_results: List[Dict], output_dir: str, target_tprs: List
     print(f"\nPer-file CSV saved to: {csv_path}")
     
     # Summary CSV with aggregated thresholds by configuration
-    summary_csv_path = os.path.join(output_dir, 'threshold_summary_by_config.csv')
+    summary_csv_path = os.path.join(output_dir, f'{dir_name}_threshold_summary_by_config.csv')
     
     # Group results by configuration
     config_groups = {}
@@ -322,15 +326,22 @@ def save_csv_results(all_results: List[Dict], output_dir: str, target_tprs: List
     print(f"Summary CSV saved to: {summary_csv_path}")
 
 
-def process_watermarked_files(input_dir: str, target_tprs: List[float] = [0.90, 0.95, 0.99, 0.999]) -> None:
+def process_watermarked_files(input_dir: str, output_dir: Optional[str] = None, target_tprs: List[float] = [0.90, 0.95, 0.99, 0.999]) -> None:
     """
     Process JSON files to calculate z-score thresholds for watermarked content only.
     Each file is processed separately.
     
     Args:
         input_dir: Directory containing JSON files with z-scores
+        output_dir: Directory to save output CSV files (defaults to input_dir)
         target_tprs: List of target true positive rates
     """
+    # Default output directory to input directory if not specified
+    if output_dir is None:
+        output_dir = input_dir
+    else:
+        # Create output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
     # Find all JSON files
     json_files = [f for f in os.listdir(input_dir) if f.endswith('.json')]
     
@@ -391,7 +402,7 @@ def process_watermarked_files(input_dir: str, target_tprs: List[float] = [0.90, 
         return
     
     # Save CSV results only
-    save_csv_results(all_results, input_dir, target_tprs)
+    save_csv_results(all_results, input_dir, output_dir, target_tprs)
     
     # Print overall summary
     print("\n" + "="*70)
@@ -418,7 +429,8 @@ def process_watermarked_files(input_dir: str, target_tprs: List[float] = [0.90, 
             print(f"  TPR {tpr_target*100:.1f}%: threshold={threshold:.4f}, actual={actual_tpr*100:.1f}%")
         
         # Save overall thresholds to a simple CSV for quick reference
-        quick_ref_csv = os.path.join(input_dir, 'threshold_quick_reference.csv')
+        dir_name = os.path.basename(os.path.normpath(input_dir))
+        quick_ref_csv = os.path.join(output_dir, f'{dir_name}_threshold_quick_reference.csv')
         with open(quick_ref_csv, 'w', newline='') as csvfile:
             writer = csv.writer(csvfile)
             writer.writerow(['Target TPR (%)', 'Z-Score Threshold', 'Actual TPR (%)', 'Total Samples'])
@@ -441,6 +453,13 @@ def main():
     )
     
     parser.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="Directory to save output CSV files (defaults to input directory)"
+    )
+    
+    parser.add_argument(
         "--tpr",
         type=float,
         nargs='+',
@@ -460,7 +479,7 @@ def main():
         return
     
     # Process files
-    process_watermarked_files(args.input, args.tpr)
+    process_watermarked_files(args.input, args.output, args.tpr)
 
 
 if __name__ == "__main__":

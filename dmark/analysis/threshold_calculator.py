@@ -331,14 +331,39 @@ def process_watermarked_files(input_dir: str, target_tprs: List[float] = [0.90, 
         input_dir: Directory containing JSON files with z-scores
         target_tprs: List of target true positive rates
     """
-    # Find all JSON files with z-scores
-    json_files = [f for f in os.listdir(input_dir) if f.endswith('_zscore.json')]
+    # Find all JSON files
+    json_files = [f for f in os.listdir(input_dir) if f.endswith('.json')]
     
     if not json_files:
-        print(f"No *_zscore.json files found in {input_dir}")
+        print(f"No JSON files found in {input_dir}")
         return
     
-    print(f"Found {len(json_files)} files to process")
+    # Filter files that contain z_score data
+    valid_files = []
+    for json_file in json_files:
+        file_path = os.path.join(input_dir, json_file)
+        try:
+            with open(file_path, 'r') as f:
+                data = json.load(f)
+                # Check if it's an array and first element has z_score
+                if isinstance(data, list) and len(data) > 0:
+                    first_item = data[0]
+                    # Check for z_score in various possible locations
+                    has_zscore = (
+                        'z_score' in first_item or
+                        ('watermark' in first_item and first_item.get('watermark') and 'z_score' in first_item['watermark'])
+                    )
+                    if has_zscore:
+                        valid_files.append(json_file)
+        except (json.JSONDecodeError, KeyError, TypeError):
+            continue
+    
+    if not valid_files:
+        print(f"No JSON files with z_score data found in {input_dir}")
+        return
+    
+    print(f"Found {len(valid_files)} files with z_score data to process")
+    json_files = valid_files
     
     all_results = []
     
@@ -412,7 +437,7 @@ def main():
         "--input",
         type=str,
         required=True,
-        help="Directory containing *_zscore.json files"
+        help="Directory containing JSON files with z_score data"
     )
     
     parser.add_argument(

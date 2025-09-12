@@ -349,7 +349,7 @@ class DreamGenerationMixin:
                 UserWarning,
             )
 
-        input_ids, attention_mask = self._expand_inputs_for_generation(
+        input_ids, attention_mask = DreamGenerationMixin._expand_inputs_for_generation(
             expand_size=generation_config.num_return_sequences,
             input_ids=input_ids,
             attention_mask=attention_mask 

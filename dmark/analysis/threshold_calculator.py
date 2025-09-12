@@ -365,28 +365,7 @@ def process_watermarked_files(input_dir: str, target_tprs: List[float] = [0.90, 
         print("No watermarked samples found in any files")
         return
     
-    # Save all results to a single JSON file
-    output_file = os.path.join(input_dir, 'threshold_analysis_per_file.json')
-    
-    # Prepare summary without raw z_scores for saving
-    save_results = []
-    for result in all_results:
-        save_result = result.copy()
-        save_result.pop('z_scores', None)  # Remove raw scores from saved file
-        save_results.append(save_result)
-    
-    with open(output_file, 'w') as f:
-        json.dump({
-            'per_file_results': save_results,
-            'summary': {
-                'total_files': len(all_results),
-                'target_tprs': target_tprs
-            }
-        }, f, indent=4)
-    
-    print(f"\nJSON results saved to: {output_file}")
-    
-    # Save CSV results
+    # Save CSV results only
     save_csv_results(all_results, input_dir, target_tprs)
     
     # Print overall summary

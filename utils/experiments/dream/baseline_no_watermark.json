@@ -1,0 +1,24 @@
+{
+    "name": "dream_baseline_no_watermark",
+    "description": "Baseline DREAM experiments without watermarking",
+    "base_command": "python -m dmark.llada.only_gen_dream",
+    "fixed_params": {
+        "model": "Dream-org/Dream-v0-Instruct-7B",
+        "output_dir": "results/dream/baseline",
+        "vocab_size": 152064,
+        "num_samples": 1000,
+        "minimum_output_token": 200,
+        "steps": 512,
+        "gen_length": 256,
+        "temperature": 0.2,
+        "alg": "entropy",
+        "alg_temp": 0.0,
+        "eps": 1e-3,
+        "top_p": 0.95,
+        "output_history": false,
+        "return_dict_in_generate": true
+    },
+    "variable_params": {
+        "dataset": ["sentence-transformers/eli5", "allenai/c4", "openai/gsm8k"]
+    }
+}

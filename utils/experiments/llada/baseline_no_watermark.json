@@ -16,6 +16,6 @@
         "temperature": 0.0
     },
     "variable_params": {
-        "dataset": ["sentence-transformers/eli5", "allenai/c4", "openai/openai_humaneval", "wmt16:cs-en"]
+        "dataset": ["sentence-transformers/eli5", "allenai/c4", "openai/openai_humaneval", "openai/gsm8k"]
     }
 }

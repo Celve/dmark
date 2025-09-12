@@ -17,6 +17,7 @@
         "key": 42,
         "prebias": false,
         "minimum_output_token": 200,
+        "batch_size": 32,
         "dataset": "allenai/c4"
     },
     "variable_params": {

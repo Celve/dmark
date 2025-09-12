@@ -30,6 +30,7 @@ class GenConfig(BaseModel):
 
 class ExprConfig(BaseModel):
     num_samples: int
+    batch_size: int = 1
     output_dir: Optional[str]
     minimum_output_token: Optional[int]
 
@@ -47,6 +48,7 @@ def parse_args():
 
     # then we add number of samples and output directory
     parser.add_argument("--num_samples", type=int, default=100)
+    parser.add_argument("--batch_size", type=int, default=1, help="Batch size for inference")
     parser.add_argument("--minimum_output_token", type=int, default=None)
     parser.add_argument("--output_dir", type=str, default=None)
 
@@ -94,6 +96,7 @@ def parse_args():
 
     expr_config = ExprConfig(
         num_samples=args.num_samples,
+        batch_size=args.batch_size,
         output_dir=args.output_dir,
         minimum_output_token=args.minimum_output_token,
     )
@@ -149,8 +152,9 @@ def generate_result_filename(
     else:
         components.append("nowm")
     
-    # Add number of samples
+    # Add number of samples and batch size
     components.append(f"n{expr_config.num_samples}")
+    components.append(f"bs{expr_config.batch_size}")
     
     # Add minimum output token if specified
     if expr_config.minimum_output_token is not None:
@@ -223,10 +227,17 @@ def run_generation(
 
     results = []
     dataset_idx = 0
+    collected_samples = 0
     pbar = tqdm.tqdm(total=expr_config.num_samples, desc="Collecting valid samples")
     
+    # Batch processing variables
+    batch_samples = []
+    batch_prompts = []
+    batch_gts = []
+    batch_input_ids = []
+    
     try:
-        while len(results) < expr_config.num_samples:
+        while collected_samples < expr_config.num_samples:
             # Get next sample based on dataset format
             if dataset_format == "text":
                 # Handle text-based datasets (like C4)
@@ -385,70 +396,133 @@ def run_generation(
                 input_ids = torch.tensor(input_ids).to(device).unsqueeze(0)
                 dataset_idx += 1
 
-            if (
-                watermark_config.strategy == "legacy-ahead"
-                or watermark_config.strategy == "legacy-both"
-            ):
-                out = generate_LLaDA(
-                    model,
-                    input_ids,
-                    steps=gen_config.steps,
-                    gen_length=gen_config.gen_length,
-                    block_length=gen_config.block_length,
-                    temperature=gen_config.temperature,
-                    cfg_scale=gen_config.cfg_scale,
-                    remasking=gen_config.remasking,
-                    watermark_config=watermark.watermark_config if watermark else None,
-                )
-            else:
-                out = generate(
-                    model,
-                    input_ids,
-                    steps=gen_config.steps,
-                    gen_length=gen_config.gen_length,
-                    block_length=gen_config.block_length,
-                    temperature=gen_config.temperature,
-                    cfg_scale=gen_config.cfg_scale,
-                    remasking=gen_config.remasking,
-                    watermark=watermark,
-                )
-
-            output_ids = out[:, input_ids.shape[1] :][0]
+            # Add sample to batch
+            batch_samples.append({'prompt': prompt, 'gt': gt, 'input_ids': input_ids})
+            batch_prompts.append(prompt)
+            batch_gts.append(gt)
+            batch_input_ids.append(input_ids)
             
-            # Trim output_ids at first occurrence of special tokens (126081 or 126348)
-            trimmed_length = len(output_ids)
-            for i, curr_token in enumerate(output_ids):
-                if curr_token == 126081 or curr_token == 126348:
-                    trimmed_length = i
-                    break
-            output_ids = output_ids[:trimmed_length]
-            
-            # Decode the trimmed output_ids
-            if trimmed_length > 0:
-                output = tokenizer.decode(output_ids, skip_special_tokens=True)
-            else:
-                output = ""
-            
-            # Check if output meets minimum token requirement
-            num_output_tokens = output_ids.shape[0]
-            if expr_config.minimum_output_token is None or num_output_tokens >= expr_config.minimum_output_token:
-                results.append(
-                    {
-                        "data": 
-                        {
-                            "prompt": prompt,
-                            "ground_truth": gt,
-                            "output": output,
-                            "output_ids": output_ids.tolist(),
-                            "num_output_tokens": num_output_tokens,
-                        },
-                        "generation_metadata": gen_config.model_dump(),
-                        "watermark_metadata": watermark_config.model_dump() if watermark_config.strategy is not None else None,
-                    }
-                )
-                pbar.update(1)
-            else:
-                pbar.set_postfix({"skipped": f"{num_output_tokens} < {expr_config.minimum_output_token}"})
+            # Process batch when full or last sample
+            if len(batch_samples) == expr_config.batch_size or (collected_samples + len(batch_samples)) >= expr_config.num_samples:
+                # Pad batch to same length
+                max_len = max(ids.shape[1] for ids in batch_input_ids)
+                padded_batch = torch.zeros(len(batch_input_ids), max_len, dtype=torch.long, device=device)
+                prompt_lengths = []
+                
+                for i, ids in enumerate(batch_input_ids):
+                    padded_batch[i, :ids.shape[1]] = ids[0]
+                    prompt_lengths.append(ids.shape[1])
+                
+                # Generate for batch
+                if (
+                    watermark_config.strategy == "legacy-ahead"
+                    or watermark_config.strategy == "legacy-both"
+                ):
+                    # Legacy doesn't support batch, process one by one
+                    for i in range(len(batch_samples)):
+                        single_input = padded_batch[i:i+1, :prompt_lengths[i]]
+                        out = generate_LLaDA(
+                            model,
+                            single_input,
+                            steps=gen_config.steps,
+                            gen_length=gen_config.gen_length,
+                            block_length=gen_config.block_length,
+                            temperature=gen_config.temperature,
+                            cfg_scale=gen_config.cfg_scale,
+                            remasking=gen_config.remasking,
+                            watermark_config=watermark.watermark_config if watermark else None,
+                        )
+                        
+                        output_ids = out[0, prompt_lengths[i]:]
+                        
+                        # Trim output_ids at first occurrence of special tokens
+                        trimmed_length = len(output_ids)
+                        for j, curr_token in enumerate(output_ids):
+                            if curr_token == 126081 or curr_token == 126348:
+                                trimmed_length = j
+                                break
+                        output_ids = output_ids[:trimmed_length]
+                        
+                        # Decode the trimmed output_ids
+                        if trimmed_length > 0:
+                            output = tokenizer.decode(output_ids, skip_special_tokens=True)
+                        else:
+                            output = ""
+                        
+                        # Check if output meets minimum token requirement
+                        num_output_tokens = output_ids.shape[0]
+                        if expr_config.minimum_output_token is None or num_output_tokens >= expr_config.minimum_output_token:
+                            results.append({
+                                "data": {
+                                    "prompt": batch_prompts[i],
+                                    "ground_truth": batch_gts[i],
+                                    "output": output,
+                                    "output_ids": output_ids.tolist(),
+                                    "num_output_tokens": num_output_tokens,
+                                },
+                                "generation_metadata": gen_config.model_dump(),
+                                "watermark_metadata": watermark_config.model_dump() if watermark_config.strategy is not None else None,
+                            })
+                            collected_samples += 1
+                            pbar.update(1)
+                        else:
+                            pbar.set_postfix({"skipped": f"{num_output_tokens} < {expr_config.minimum_output_token}"})
+                else:
+                    # Use batch inference
+                    out = generate(
+                        model,
+                        padded_batch,
+                        steps=gen_config.steps,
+                        gen_length=gen_config.gen_length,
+                        block_length=gen_config.block_length,
+                        temperature=gen_config.temperature,
+                        cfg_scale=gen_config.cfg_scale,
+                        remasking=gen_config.remasking,
+                        watermark=watermark,
+                    )
+                    
+                    # Process each output in batch
+                    for i in range(len(batch_samples)):
+                        output_ids = out[i, prompt_lengths[i]:]
+                        
+                        # Trim output_ids at first occurrence of special tokens
+                        trimmed_length = len(output_ids)
+                        for j, curr_token in enumerate(output_ids):
+                            if curr_token == 126081 or curr_token == 126348:
+                                trimmed_length = j
+                                break
+                        output_ids = output_ids[:trimmed_length]
+                        
+                        # Decode the trimmed output_ids
+                        if trimmed_length > 0:
+                            output = tokenizer.decode(output_ids, skip_special_tokens=True)
+                        else:
+                            output = ""
+                        
+                        # Check if output meets minimum token requirement
+                        num_output_tokens = output_ids.shape[0]
+                        if expr_config.minimum_output_token is None or num_output_tokens >= expr_config.minimum_output_token:
+                            results.append({
+                                "data": {
+                                    "prompt": batch_prompts[i],
+                                    "ground_truth": batch_gts[i],
+                                    "output": output,
+                                    "output_ids": output_ids.tolist(),
+                                    "num_output_tokens": num_output_tokens,
+                                },
+                                "generation_metadata": gen_config.model_dump(),
+                                "watermark_metadata": watermark_config.model_dump() if watermark_config.strategy is not None else None,
+                            })
+                            collected_samples += 1
+                            pbar.update(1)
+                        else:
+                            pbar.set_postfix({"skipped": f"{num_output_tokens} < {expr_config.minimum_output_token}"})
+                
+                # Clear batch
+                batch_samples = []
+                batch_prompts = []
+                batch_gts = []
+                batch_input_ids = []
             
             dataset_idx += 1
     
@@ -459,8 +533,8 @@ def run_generation(
     
     pbar.close()
     
-    if len(results) < expr_config.num_samples:
-        print(f"Warning: Only collected {len(results)} valid samples out of {expr_config.num_samples} requested.")
+    if collected_samples < expr_config.num_samples:
+        print(f"Warning: Only collected {collected_samples} valid samples out of {expr_config.num_samples} requested.")
         print(f"Dataset exhausted at index {dataset_idx}.")
 
     return results

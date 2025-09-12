@@ -444,6 +444,7 @@ def run_generation(
                         },
                         "generation_metadata": gen_config.model_dump(),
                         "watermark_metadata": watermark_config.model_dump() if watermark_config.strategy is not None else None,
+                        "expr_metadata": expr_config.model_dump(),
                     }
                 )
                 pbar.update(1)

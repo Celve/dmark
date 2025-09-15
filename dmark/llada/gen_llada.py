@@ -180,12 +180,21 @@ def generate(
                         else:
                             prev_logits = None
                             prev_token = x[j, index - 1]
+                        if index + 1 >= x0.shape[1]:
+                            next_logits = None
+                            next_token = None
+                        elif x[j, index + 1] == mask_id:
+                            next_logits = logits_todo[j, index + 1]
+                            next_token = None
+                        else:
+                            next_logits = None
+                            next_token = x[j, index + 1]
                         x0[j, index] = watermark.apply_once(
                             logits_with_noise[j, index],
-                            index - prompt.shape[1],
                             prev_logits,
                             prev_token,
-                            x0[j, index + 1] if index + 1 < x0.shape[1] else None,
+                            next_logits,
+                            next_token,
                         )
 
                 transfer_index[j, select_index] = True

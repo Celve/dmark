@@ -25,7 +25,6 @@ class Watermark:
     def apply_once(
         self,
         curr_logits: torch.Tensor,
-        pos: int,
         prev_logits: Optional[torch.Tensor],
         prev_token: Optional[torch.Tensor],
         next_logits: Optional[torch.Tensor],
@@ -74,6 +73,8 @@ class Watermark:
                     self.bitmap.get_col(next_token.item()).float()
                     * self.watermark_config.delta
                 )
+        else: 
+            raise ValueError(f"Invalid strategy: {self.watermark_config.strategy}")
 
         biased_logits = curr_logits + prev_bias + next_bias
         result = torch.argmax(biased_logits)  # TODO: sampling also matters here

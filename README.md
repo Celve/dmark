@@ -170,7 +170,7 @@ python utils/generate_experiments.py config.json --max-commands 10
 - `--strategy`: Watermark strategy
   - `normal`: Uses previous token (i-1)
   - `predict`: Uses predicted tokens
-  - `reverse`: Bidirectional (both prev and next)
+  - `bidirectional`: Bidirectional (both prev and next)
 - `--delta`: Watermark strength (1.0-10.0)
 - `--ratio`: Green list ratio (0.25, 0.5, 0.75)
 - `--key`: Hash key for randomization
@@ -184,7 +184,7 @@ python utils/generate_experiments.py config.json --max-commands 10
 - `--remasking`: Token revelation order
   - `low_confidence`: Unmask least confident first
   - `random`: Random order
-  - `right_to_left`: Reverse sequential
+  - `right_to_left`: Bidirectional sequential
   - `left_to_right`: Traditional sequential
 
 ### Generation (DREAM)

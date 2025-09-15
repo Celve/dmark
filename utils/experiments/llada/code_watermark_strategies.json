@@ -22,6 +22,6 @@
     "variable_params": {
         "delta": [1.0, 2.0, 5.0, 10.0],
         "remasking": ["low_confidence", "random", "right_to_left", "left_to_right"],
-        "strategy": ["normal", "predict", "reverse"]
+        "strategy": ["normal", "predict", "bidirectional"]
     }
 }

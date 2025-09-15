@@ -35,7 +35,7 @@ def add_gumbel_noise(logits, temperature):
 
 def get_num_transfer_tokens(mask_index, steps):
     """
-    In the reverse process, the interval [0, 1] is uniformly discretized into steps intervals.
+    In the bidirectional process, the interval [0, 1] is uniformly discretized into steps intervals.
     Furthermore, because LLaDA employs a linear noise schedule (as defined in Eq. (8)),
     the expected number of tokens transitioned at each step should be consistent.
 
@@ -244,7 +244,7 @@ def parse_args():
         "--strategy",
         type=str,
         default=None,
-        choices=["normal", "predict", "reverse", "legacy-ahead", "legacy-both"],
+        choices=["normal", "predict", "bidirectional", "legacy-ahead", "legacy-both"],
         help="Watermark strategy (if provided, watermarking is enabled)",
     )
     parser.add_argument(

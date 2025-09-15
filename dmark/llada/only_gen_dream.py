@@ -67,7 +67,7 @@ def parse_args():
 
     # now it's time to add watermark arguments 
     # even though many of them have default values, the watermark will only be enabled if the strategy is not None
-    parser.add_argument("--strategy", type=str, default=None, choices=["normal", "predict", "reverse"])
+    parser.add_argument("--strategy", type=str, default=None, choices=["normal", "predict", "bidirectional"])
     parser.add_argument("--bitmap", type=str, default="bitmap.bin")
     parser.add_argument("--vocab_size", type=int, default=152064)
     parser.add_argument("--ratio", type=float, default=0.5)

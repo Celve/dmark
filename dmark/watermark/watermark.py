@@ -28,6 +28,7 @@ class Watermark:
         pos: int,
         prev_logits: Optional[torch.Tensor],
         prev_token: Optional[torch.Tensor],
+        next_logits: Optional[torch.Tensor],
         next_token: Optional[torch.Tensor],
     ) -> torch.Tensor:
         prev_bias = torch.zeros_like(curr_logits)
@@ -39,24 +40,40 @@ class Watermark:
                     self.bitmap.get_row(prev_token.item()).float()
                     * self.watermark_config.delta
                 )
-        else:
-            assert (
-                self.watermark_config.strategy == "reverse"
-                or self.watermark_config.strategy == "predict"
-            )
-
+        elif self.watermark_config.strategy == "predict":
+            if prev_token is None: 
+                prev_token = prev_logits.argmax(dim=-1) 
+            prev_bias = (
+                self.bitmap.get_row(prev_token.item()).float()
+                * self.watermark_config.delta
+            ) 
+        elif self.watermark_config.strategy == "bidirectional":
+            if prev_token is not None:
+                prev_bias = (
+                    self.bitmap.get_row(prev_token.item()).float()
+                    * self.watermark_config.delta
+                )
+            
+            if next_token is not None:
+                next_bias = (
+                    self.bitmap.get_col(next_token.item()).float()
+                    * self.watermark_config.delta
+                )
+        elif self.watermark_config.strategy == "predict-bidirectional":
             if prev_token is None:
                 prev_token = prev_logits.argmax(dim=-1)
             prev_bias = (
                 self.bitmap.get_row(prev_token.item()).float()
                 * self.watermark_config.delta
             )
-
-            if next_token is not None and self.watermark_config.strategy == "reverse":
-                col_tensor = self.bitmap.get_col(next_token.item())
-                next_bias = col_tensor.float() * self.watermark_config.delta
-                next_bias = next_bias.to(curr_logits.device)
-                self.double += 1
+            
+            if next_token is None and next_logits is not None:
+                next_token = next_logits.argmax(dim=-1)
+            if next_token is not None:
+                next_bias = (
+                    self.bitmap.get_col(next_token.item()).float()
+                    * self.watermark_config.delta
+                )
 
         biased_logits = curr_logits + prev_bias + next_bias
         result = torch.argmax(biased_logits)  # TODO: sampling also matters here

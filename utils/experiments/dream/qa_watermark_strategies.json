@@ -23,6 +23,6 @@
     },
     "variable_params": {
         "delta": [1.0, 2.0, 5.0, 10.0],
-        "strategy": ["normal", "predict", "reverse"]
+        "strategy": ["normal", "predict", "bidirectional"]
     }
 }

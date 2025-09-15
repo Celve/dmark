@@ -13,15 +13,15 @@
         "block_length": 32,
         "temperature": 0.0,
         "cfg_scale": 0.0,
-        "ratio": 0.5,
         "key": 42,
         "prebias": false,
         "minimum_output_token": 200,
         "dataset": "openai/gsm8k"
     },
     "variable_params": {
-        "delta": [1.0, 2.0, 5.0, 10.0],
+        "delta": [0.5, 1.0, 2.0, 5.0, 10.0],
         "remasking": ["low_confidence", "random", "right_to_left", "left_to_right"],
-        "strategy": ["normal", "predict", "bidirectional"]
+        "strategy": ["normal", "predict", "bidirectional", "predict-bidirectional"],
+        "ratio": [0.5, 0.75, 0.25]
     }
 }

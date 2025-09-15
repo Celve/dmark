@@ -12,10 +12,10 @@
         "gen_length": 256,
         "block_length": 32,
         "cfg_scale": 0.0,
-        "remasking": "low_confidence",
         "temperature": 0.0
     },
     "variable_params": {
-        "dataset": ["sentence-transformers/eli5", "allenai/c4", "openai/openai_humaneval", "openai/gsm8k"]
+        "dataset": ["sentence-transformers/eli5", "allenai/c4", "openai/gsm8k"],
+        "remasking": ["low_confidence", "random", "right_to_left", "left_to_right"]
     }
 }

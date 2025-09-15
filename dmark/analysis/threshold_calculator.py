@@ -184,12 +184,12 @@ def process_single_file(file_path: str, target_tprs: List[float] = [0.90, 0.95, 
 
 def save_csv_results(all_results: List[Dict], input_dir: str, output_dir: str, target_tprs: List[float]) -> None:
     """
-    Save threshold analysis results to CSV files.
+    Save threshold analysis results to a CSV file.
     
     Args:
         all_results: List of analysis results from each file
         input_dir: Directory containing input files (used for naming)
-        output_dir: Directory to save CSV files
+        output_dir: Directory to save CSV file
         target_tprs: List of target true positive rates
     """
     # Use input directory name as base for CSV filenames
@@ -251,79 +251,7 @@ def save_csv_results(all_results: List[Dict], input_dir: str, output_dir: str, t
             
             writer.writerow(row)
     
-    print(f"\nPer-file CSV saved to: {csv_path}")
-    
-    # Summary CSV with aggregated thresholds by configuration
-    summary_csv_path = os.path.join(output_dir, f'{dir_name}_threshold_summary_by_config.csv')
-    
-    # Group results by configuration
-    config_groups = {}
-    for result in all_results:
-        meta = result['metadata']
-        # Create a configuration key
-        config_key = (
-            meta.get('strategy'),
-            meta.get('ratio'),
-            meta.get('delta'),
-            meta.get('key'),
-            meta.get('prebias'),
-            meta.get('remasking'),
-            meta.get('model'),
-            meta.get('dataset')
-        )
-        
-        if config_key not in config_groups:
-            config_groups[config_key] = []
-        config_groups[config_key].append(result)
-    
-    # Write summary CSV
-    summary_headers = [
-        'strategy', 'ratio', 'delta', 'key', 'prebias', 'remasking',
-        'model', 'dataset', 'num_files', 'total_samples', 'mean_zscore', 'std_zscore'
-    ]
-    
-    for tpr in target_tprs:
-        summary_headers.append(f'threshold_tpr_{tpr:.1%}')
-        summary_headers.append(f'actual_tpr_{tpr:.1%}')
-    
-    with open(summary_csv_path, 'w', newline='') as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=summary_headers)
-        writer.writeheader()
-        
-        for config_key, group_results in config_groups.items():
-            # Aggregate z-scores for this configuration
-            all_scores = []
-            for result in group_results:
-                all_scores.extend(result['z_scores'])
-            
-            if all_scores:
-                # Calculate aggregated thresholds
-                agg_thresholds = calculate_thresholds_for_tpr(all_scores, target_tprs)
-                
-                row = {
-                    'strategy': config_key[0],
-                    'ratio': config_key[1],
-                    'delta': config_key[2],
-                    'key': config_key[3],
-                    'prebias': config_key[4],
-                    'remasking': config_key[5],
-                    'model': config_key[6],
-                    'dataset': config_key[7],
-                    'num_files': len(group_results),
-                    'total_samples': len(all_scores),
-                    'mean_zscore': np.mean(all_scores),
-                    'std_zscore': np.std(all_scores)
-                }
-                
-                # Add threshold data
-                for tpr, threshold in agg_thresholds.items():
-                    actual_tpr = sum(1 for score in all_scores if score >= threshold) / len(all_scores)
-                    row[f'threshold_tpr_{tpr:.1%}'] = threshold
-                    row[f'actual_tpr_{tpr:.1%}'] = actual_tpr
-                
-                writer.writerow(row)
-    
-    print(f"Summary CSV saved to: {summary_csv_path}")
+    print(f"\nCSV saved to: {csv_path}")
 
 
 def process_watermarked_files(input_dir: str, output_dir: Optional[str] = None, target_tprs: List[float] = [0.90, 0.95, 0.99, 0.999]) -> None:
@@ -401,7 +329,7 @@ def process_watermarked_files(input_dir: str, output_dir: Optional[str] = None, 
         print("No watermarked samples found in any files")
         return
     
-    # Save CSV results only
+    # Save CSV result
     save_csv_results(all_results, input_dir, output_dir, target_tprs)
     
     # Print overall summary
@@ -427,17 +355,6 @@ def process_watermarked_files(input_dir: str, output_dir: Optional[str] = None, 
         for tpr_target, threshold in overall_thresholds.items():
             actual_tpr = sum(1 for score in all_z_scores if score >= threshold) / len(all_z_scores)
             print(f"  TPR {tpr_target*100:.1f}%: threshold={threshold:.4f}, actual={actual_tpr*100:.1f}%")
-        
-        # Save overall thresholds to a simple CSV for quick reference
-        dir_name = os.path.basename(os.path.normpath(input_dir))
-        quick_ref_csv = os.path.join(output_dir, f'{dir_name}_threshold_quick_reference.csv')
-        with open(quick_ref_csv, 'w', newline='') as csvfile:
-            writer = csv.writer(csvfile)
-            writer.writerow(['Target TPR (%)', 'Z-Score Threshold', 'Actual TPR (%)', 'Total Samples'])
-            for tpr_target, threshold in overall_thresholds.items():
-                actual_tpr = sum(1 for score in all_z_scores if score >= threshold) / len(all_z_scores)
-                writer.writerow([f'{tpr_target*100:.1f}', f'{threshold:.4f}', f'{actual_tpr*100:.1f}', len(all_z_scores)])
-        print(f"\nQuick reference CSV saved to: {quick_ref_csv}")
 
 
 def main():

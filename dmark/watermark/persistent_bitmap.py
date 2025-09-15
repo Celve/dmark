@@ -22,7 +22,7 @@ class PersistentBitmap:
             self._load()
 
     def _initialize(self):
-        self.matrix = torch.zeros((self.vocab_size, self.vocab_size), dtype=torch.bool)
+        self.matrix = torch.zeros((self.vocab_size, self.vocab_size), dtype=torch.bool, device="cuda")
         self._save()
 
     def _load(self):

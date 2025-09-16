@@ -118,18 +118,72 @@ python -m dmark.eval.ppl \
     --model meta-llama/Meta-Llama-3-8B-Instruct
 ```
 
-### Robustness Testing
+### Robustness Testing (Attacks)
+
+The attack system automatically uses truncated outputs when available (prioritizes `truncated_output_ids` over `output_ids`).
+
+#### Recommended Workflow for Fair Comparison
 ```bash
-# Apply attack
+# 1. First truncate outputs to consistent length
+python -m dmark.eval.truncate --input results/
+
+# 2. Then apply attacks to truncated data
+python -m dmark.attack.attacks --input results_truncated/
+
+# 3. Evaluate watermark detection on attacked data
+python -m dmark.eval.zscore --input results_truncated_attack_swap_20/ --bitmap bitmap.bin
+```
+
+#### Attack Single File
+```bash
+# Apply swap attack to single file
 python -m dmark.attack.attacks \
     --input results.json \
     --output attacked.json \
     --attack swap \
-    --ratio 0.2
+    --ratio 0.2 \
+    --seed 42
+```
 
-# Re-evaluate
+#### Attack Directory (Batch Processing)
+```bash
+# Attack all JSON files in directory 
+# Auto-creates: results_attack_swap_20/ (for swap attack with 20% ratio)
+python -m dmark.attack.attacks \
+    --input results/
+
+# With custom parameters
+# Auto-creates: results_attack_delete_30/ (for delete attack with 30% ratio)
+python -m dmark.attack.attacks \
+    --input results/ \
+    --attack delete \
+    --ratio 0.3 \
+    --seed 42
+
+# Specify custom output directory
+python -m dmark.attack.attacks \
+    --input results/ \
+    --output custom_attacked_dir/ \
+    --attack insert \
+    --ratio 0.25
+```
+
+#### Attack Types
+- **swap**: Randomly swap token pairs (preserves length)
+- **delete**: Remove random tokens
+- **insert**: Add random tokens at random positions  
+- **synonym**: Replace tokens with random vocabulary tokens
+
+#### Re-evaluate After Attack
+```bash
+# Evaluate attacked files
 python -m dmark.eval.zscore \
-    --input attacked.json \
+    --input results_attack_swap_20/output.json \
+    --bitmap bitmaps/bitmap_v126464_r50_k42.bin
+
+# Evaluate entire attacked directory
+python -m dmark.eval.zscore \
+    --input results_attack_delete_30/ \
     --bitmap bitmaps/bitmap_v126464_r50_k42.bin
 ```
 
@@ -140,6 +194,36 @@ python -m dmark.analysis.threshold_calculator \
     --pattern "*_zscore.json" \
     --output threshold_analysis.json
 ```
+
+### Data Truncation
+Truncate outputs to minimum length specified in experiment metadata (for fair comparison):
+
+```bash
+# Truncate single file (auto-detects min_length from expr_metadata)
+python -m dmark.eval.truncate \
+    --input results.json
+
+# Truncate directory (creates results_truncated/)
+python -m dmark.eval.truncate \
+    --input results/
+
+# Specify custom truncation length
+python -m dmark.eval.truncate \
+    --input results/ \
+    --min_length 150
+
+# Specify model for tokenizer (auto-detected from metadata if not provided)
+python -m dmark.eval.truncate \
+    --input results/ \
+    --model GSAI-ML/LLaDA-8B-Instruct
+```
+
+Features:
+- Auto-detects `minimum_output_token` from `expr_metadata` (defaults to 200)
+- Uses proper tokenizer for accurate text truncation
+- Adds `truncated_output` and `truncated_output_ids` fields
+- Preserves original data while adding truncated versions
+- Creates `_truncation_summary.json` with statistics
 
 ## Utility Tools
 

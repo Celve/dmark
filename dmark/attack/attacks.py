@@ -245,44 +245,60 @@ def process_json_file(
         # Create a copy of the result
         attacked_result = result.copy()
         
-        # Get output IDs
-        if 'data' in result and 'output_ids' in result['data']:
-            output_ids = result['data']['output_ids']
+        # Get output IDs - prioritize truncated_output_ids if available
+        if 'data' in result:
+            # Use truncated_output_ids if available, otherwise use output_ids
+            if 'truncated_output_ids' in result['data']:
+                output_ids = result['data']['truncated_output_ids']
+            elif 'output_ids' in result['data']:
+                output_ids = result['data']['output_ids']
+            else:
+                output_ids = None
             
-            try:
-                # Apply attack
-                attacked_ids, attack_metadata = apply_attack(
-                    output_ids,
-                    attack_type,
-                    ratio,
-                    seed=seed + idx if seed is not None else None,
-                    tokenizer=tokenizer
-                )
-                
-                # Update the output_ids
-                attacked_result['data']['output_ids'] = attacked_ids
-                
-                # Decode attacked IDs to get new output text
-                attacked_text = tokenizer.decode(attacked_ids, skip_special_tokens=True)
-                
-                # Store original output for reference if it exists
-                if 'output' in result['data']:
-                    attacked_result['data']['original_output'] = result['data']['output']
-                
-                # Update the output text field
-                attacked_result['data']['output'] = attacked_text
-                
-                # Add attack metadata
-                attacked_result['attack_metadata'] = attack_metadata
-                
-                # Update statistics
-                stats['successful_attacks'] += 1
-                stats['original_lengths'].append(attack_metadata['original_length'])
-                stats['attacked_lengths'].append(attack_metadata['attacked_length'])
-                stats['tokens_affected'].append(attack_metadata['tokens_affected'])
-                
-            except Exception as e:
-                print(f"  Warning: Failed to attack sample {idx}: {e}")
+            if output_ids is not None:
+                try:
+                    # Apply attack
+                    attacked_ids, attack_metadata = apply_attack(
+                        output_ids,
+                        attack_type,
+                        ratio,
+                        seed=seed + idx if seed is not None else None,
+                        tokenizer=tokenizer
+                    )
+                    
+                    # Update the same field we read from
+                    if 'truncated_output_ids' in result['data']:
+                        # We used truncated, so update truncated fields
+                        attacked_result['data']['truncated_output_ids'] = attacked_ids
+                        # Decode attacked IDs to get new output text
+                        attacked_text = tokenizer.decode(attacked_ids, skip_special_tokens=True)
+                        # Store original truncated output if it exists
+                        if 'truncated_output' in result['data']:
+                            attacked_result['data']['original_truncated_output'] = result['data']['truncated_output']
+                        attacked_result['data']['truncated_output'] = attacked_text
+                    else:
+                        # We used regular output_ids, so update regular fields
+                        attacked_result['data']['output_ids'] = attacked_ids
+                        # Decode attacked IDs to get new output text
+                        attacked_text = tokenizer.decode(attacked_ids, skip_special_tokens=True)
+                        # Store original output if it exists
+                        if 'output' in result['data']:
+                            attacked_result['data']['original_output'] = result['data']['output']
+                        attacked_result['data']['output'] = attacked_text
+                    
+                    # Add attack metadata
+                    attacked_result['attack_metadata'] = attack_metadata
+                    
+                    # Update statistics
+                    stats['successful_attacks'] += 1
+                    stats['original_lengths'].append(attack_metadata['original_length'])
+                    stats['attacked_lengths'].append(attack_metadata['attacked_length'])
+                    stats['tokens_affected'].append(attack_metadata['tokens_affected'])
+                    
+                except Exception as e:
+                    print(f"  Warning: Failed to attack sample {idx}: {e}")
+                    stats['failed_attacks'] += 1
+            else:
                 stats['failed_attacks'] += 1
         else:
             stats['failed_attacks'] += 1
@@ -319,7 +335,9 @@ def process_directory(
     if output_dir is None:
         base_dir = os.path.dirname(input_dir.rstrip('/'))
         dir_name = os.path.basename(input_dir.rstrip('/'))
-        output_dir = os.path.join(base_dir, f"{dir_name}_attack")
+        # Include attack type and ratio in directory name
+        ratio_percent = int(ratio * 100)
+        output_dir = os.path.join(base_dir, f"{dir_name}_attack_{attack_type}_{ratio_percent}")
     
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)

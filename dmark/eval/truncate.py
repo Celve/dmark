@@ -24,13 +24,6 @@ def get_min_length_from_metadata(results: List[Dict[str, Any]]) -> int:
             exp_meta = result['expr_metadata']
             if 'minimum_output_token' in exp_meta and exp_meta['minimum_output_token'] is not None:
                 return exp_meta['minimum_output_token']
-        
-        # Also check generation_metadata for gen_length as fallback
-        if 'generation_metadata' in result and result['generation_metadata']:
-            gen_meta = result['generation_metadata']
-            if 'gen_length' in gen_meta and gen_meta['gen_length'] is not None:
-                # Use gen_length as a reasonable truncation length
-                return gen_meta['gen_length']
     
     # Default to 200 if no metadata found
     return 200

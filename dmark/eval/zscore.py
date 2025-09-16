@@ -108,8 +108,13 @@ def process_json_file(
     
     # Process each result
     for result in tqdm(results, desc="Processing results"):
-        # Get output IDs
-        output_ids = result["data"]["output_ids"]
+        # Get output IDs - prioritize attacked_ids, then truncated_output_ids, then output_ids
+        if "attacked_ids" in result["data"]:
+            output_ids = result["data"]["attacked_ids"]
+        elif "truncated_output_ids" in result["data"]:
+            output_ids = result["data"]["truncated_output_ids"]
+        else:
+            output_ids = result["data"]["output_ids"]
         
         # Tokenize prompt to get prompt_ids
         prompt_text = result["data"].get("prompt", "")

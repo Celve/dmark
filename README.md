@@ -120,19 +120,29 @@ python -m dmark.eval.ppl \
 
 ### Robustness Testing (Attacks)
 
-The attack system automatically uses truncated outputs when available (prioritizes `truncated_output_ids` over `output_ids`).
+The attack system preserves all data stages by adding new fields:
+- **Original**: `output_ids`, `output`
+- **Truncated**: `truncated_output_ids`, `truncated_output`  
+- **Attacked**: `attacked_ids`, `attacked_text`
+
+The z-score evaluation automatically uses the most processed version available (attacked → truncated → original).
 
 #### Recommended Workflow for Fair Comparison
 ```bash
 # 1. First truncate outputs to consistent length
 python -m dmark.eval.truncate --input results/
 
-# 2. Then apply attacks to truncated data
+# 2. Apply attacks (adds attacked_ids/attacked_text fields)
 python -m dmark.attack.attacks --input results_truncated/
 
-# 3. Evaluate watermark detection on attacked data
+# 3. Evaluate watermark detection (automatically uses attacked_ids)
 python -m dmark.eval.zscore --input results_truncated_attack_swap_20/ --bitmap bitmap.bin
 ```
+
+Field priority in z-score evaluation:
+1. `attacked_ids` (if present)
+2. `truncated_output_ids` (if present)
+3. `output_ids` (fallback)
 
 #### Attack Single File
 ```bash

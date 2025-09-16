@@ -266,25 +266,18 @@ def process_json_file(
                         tokenizer=tokenizer
                     )
                     
-                    # Update the same field we read from
+                    # Decode attacked IDs to get text
+                    attacked_text = tokenizer.decode(attacked_ids, skip_special_tokens=True)
+                    
+                    # Add new fields for attacked data (don't replace original fields)
+                    attacked_result['data']['attacked_ids'] = attacked_ids
+                    attacked_result['data']['attacked_text'] = attacked_text
+                    
+                    # Track which field was used as source
                     if 'truncated_output_ids' in result['data']:
-                        # We used truncated, so update truncated fields
-                        attacked_result['data']['truncated_output_ids'] = attacked_ids
-                        # Decode attacked IDs to get new output text
-                        attacked_text = tokenizer.decode(attacked_ids, skip_special_tokens=True)
-                        # Store original truncated output if it exists
-                        if 'truncated_output' in result['data']:
-                            attacked_result['data']['original_truncated_output'] = result['data']['truncated_output']
-                        attacked_result['data']['truncated_output'] = attacked_text
+                        attack_metadata['source_field'] = 'truncated_output_ids'
                     else:
-                        # We used regular output_ids, so update regular fields
-                        attacked_result['data']['output_ids'] = attacked_ids
-                        # Decode attacked IDs to get new output text
-                        attacked_text = tokenizer.decode(attacked_ids, skip_special_tokens=True)
-                        # Store original output if it exists
-                        if 'output' in result['data']:
-                            attacked_result['data']['original_output'] = result['data']['output']
-                        attacked_result['data']['output'] = attacked_text
+                        attack_metadata['source_field'] = 'output_ids'
                     
                     # Add attack metadata
                     attacked_result['attack_metadata'] = attack_metadata

@@ -108,34 +108,52 @@ def process_json_file(
     
     # Process each result
     for result in tqdm(results, desc="Processing results"):
-        # Get output IDs - prioritize attacked_ids, then truncated_output_ids, then output_ids
-        if "attacked_ids" in result["data"]:
-            output_ids = result["data"]["attacked_ids"]
-        elif "truncated_output_ids" in result["data"]:
-            output_ids = result["data"]["truncated_output_ids"]
-        else:
-            output_ids = result["data"]["output_ids"]
-        
-        # Tokenize prompt to get prompt_ids
+        # Tokenize prompt to get prompt_ids (used for all versions)
         prompt_text = result["data"].get("prompt", "")
         if prompt_text:
             prompt_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
         else:
             prompt_ids = []
         
-        # Calculate z-score
-        detection_rate, z_score = calculate_zscore(
-            output_ids,
-            watermark,
-            prompt_ids,
-            max_tokens
-        )
-        
-        # Add z-score and detection rate to result
+        # Initialize watermark dict if not present
         if "watermark" not in result:
             result["watermark"] = {}
-        result["watermark"]["z_score"] = z_score
-        result["watermark"]["detection_rate"] = detection_rate
+        
+        # Calculate z-score for original output_ids
+        if "output_ids" in result["data"]:
+            output_ids = result["data"]["output_ids"]
+            detection_rate, z_score = calculate_zscore(
+                output_ids,
+                watermark,
+                prompt_ids,
+                max_tokens
+            )
+            result["watermark"]["z_score_original"] = z_score
+            result["watermark"]["detection_rate_original"] = detection_rate
+        
+        # Calculate z-score for truncated_output_ids
+        if "truncated_output_ids" in result["data"]:
+            truncated_ids = result["data"]["truncated_output_ids"]
+            detection_rate, z_score = calculate_zscore(
+                truncated_ids,
+                watermark,
+                prompt_ids,
+                max_tokens
+            )
+            result["watermark"]["z_score_truncated"] = z_score
+            result["watermark"]["detection_rate_truncated"] = detection_rate
+        
+        # Calculate z-score for attacked_ids
+        if "attacked_ids" in result["data"]:
+            attacked_ids = result["data"]["attacked_ids"]
+            detection_rate, z_score = calculate_zscore(
+                attacked_ids,
+                watermark,
+                prompt_ids,
+                max_tokens
+            )
+            result["watermark"]["z_score_attacked"] = z_score
+            result["watermark"]["detection_rate_attacked"] = detection_rate
     
     # Save results to new file
     with open(output_file, 'w') as f:
@@ -144,13 +162,35 @@ def process_json_file(
     print(f"Processed {len(results)} results")
     print(f"Results saved to: {output_file}")
     
-    # Print summary statistics
-    z_scores = [r["watermark"]["z_score"] for r in results if r.get("watermark") is not None and r["watermark"].get("z_score") is not None]
-    if z_scores:
-        avg_z = sum(z_scores) / len(z_scores)
-        max_z = max(z_scores)
-        min_z = min(z_scores)
-        print(f"Z-score statistics: avg={avg_z:.2f}, min={min_z:.2f}, max={max_z:.2f}")
+    # Print summary statistics for each version
+    print("\n--- Z-score Statistics ---")
+    
+    # Original output statistics
+    z_scores_original = [r["watermark"]["z_score_original"] for r in results 
+                         if r.get("watermark") is not None and r["watermark"].get("z_score_original") is not None]
+    if z_scores_original:
+        avg_z = sum(z_scores_original) / len(z_scores_original)
+        max_z = max(z_scores_original)
+        min_z = min(z_scores_original)
+        print(f"Original output: avg={avg_z:.2f}, min={min_z:.2f}, max={max_z:.2f} (n={len(z_scores_original)})")
+    
+    # Truncated output statistics
+    z_scores_truncated = [r["watermark"]["z_score_truncated"] for r in results 
+                          if r.get("watermark") is not None and r["watermark"].get("z_score_truncated") is not None]
+    if z_scores_truncated:
+        avg_z = sum(z_scores_truncated) / len(z_scores_truncated)
+        max_z = max(z_scores_truncated)
+        min_z = min(z_scores_truncated)
+        print(f"Truncated output: avg={avg_z:.2f}, min={min_z:.2f}, max={max_z:.2f} (n={len(z_scores_truncated)})")
+    
+    # Attacked output statistics
+    z_scores_attacked = [r["watermark"]["z_score_attacked"] for r in results 
+                         if r.get("watermark") is not None and r["watermark"].get("z_score_attacked") is not None]
+    if z_scores_attacked:
+        avg_z = sum(z_scores_attacked) / len(z_scores_attacked)
+        max_z = max(z_scores_attacked)
+        min_z = min(z_scores_attacked)
+        print(f"Attacked output: avg={avg_z:.2f}, min={min_z:.2f}, max={max_z:.2f} (n={len(z_scores_attacked)})")
 
 
 def main():

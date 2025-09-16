@@ -111,6 +111,13 @@ python -m dmark.eval.zscore \
     --model GSAI-ML/LLaDA-8B-Instruct
 ```
 
+**Multi-version Z-score Calculation**: The evaluation now calculates z-scores for all available output versions in a single pass:
+- `z_score_original`: Z-score for `output_ids`
+- `z_score_truncated`: Z-score for `truncated_output_ids` (if present)
+- `z_score_attacked`: Z-score for `attacked_ids` (if present)
+
+This allows comparison of watermark detection strength across different processing stages.
+
 ### Text Quality (Perplexity)
 ```bash
 python -m dmark.eval.ppl \

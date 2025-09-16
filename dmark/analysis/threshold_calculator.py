@@ -103,13 +103,14 @@ def extract_metadata_from_results(results: List[Dict]) -> Dict[str, Optional[str
     return metadata
 
 
-def process_single_file(file_path: str, target_tprs: List[float] = [0.90, 0.95, 0.99, 0.999]) -> Dict:
+def process_single_file(file_path: str, target_tprs: List[float] = [0.90, 0.95, 0.99, 0.999], z_score_type: str = 'auto') -> Dict:
     """
     Process a single JSON file to calculate z-score thresholds.
     
     Args:
         file_path: Path to JSON file with z-scores
         target_tprs: List of target true positive rates
+        z_score_type: Which z-score to use ('original', 'truncated', 'attacked', 'auto')
     
     Returns:
         Dictionary with analysis results for this file
@@ -122,16 +123,44 @@ def process_single_file(file_path: str, target_tprs: List[float] = [0.90, 0.95, 
     
     # Collect z-scores from watermarked samples only
     watermark_scores = []
+    z_score_version = None
     
     for result in results:
         # Check if this is a watermarked sample
         if result.get('watermark_metadata') is not None:
-            # Try different locations for z_score
+            # Try different locations for z_score based on type
             z_score = None
             if 'watermark' in result and result['watermark'] is not None:
-                z_score = result['watermark'].get('z_score')
-            elif 'z_score' in result:
+                wm_data = result['watermark']
+                
+                if z_score_type == 'original' and 'z_score_original' in wm_data:
+                    z_score = wm_data['z_score_original']
+                    z_score_version = 'original'
+                elif z_score_type == 'truncated' and 'z_score_truncated' in wm_data:
+                    z_score = wm_data['z_score_truncated']
+                    z_score_version = 'truncated'
+                elif z_score_type == 'attacked' and 'z_score_attacked' in wm_data:
+                    z_score = wm_data['z_score_attacked']
+                    z_score_version = 'attacked'
+                elif z_score_type == 'auto':
+                    # Auto-detect: prioritize original, then truncated, then attacked, then legacy
+                    if 'z_score_original' in wm_data:
+                        z_score = wm_data['z_score_original']
+                        z_score_version = 'original'
+                    elif 'z_score_truncated' in wm_data:
+                        z_score = wm_data['z_score_truncated']
+                        z_score_version = 'truncated'
+                    elif 'z_score_attacked' in wm_data:
+                        z_score = wm_data['z_score_attacked']
+                        z_score_version = 'attacked'
+                    elif 'z_score' in wm_data:
+                        z_score = wm_data['z_score']
+                        z_score_version = 'legacy'
+            
+            # Fallback to old location if not found in watermark dict
+            if z_score is None and 'z_score' in result:
                 z_score = result['z_score']
+                z_score_version = 'legacy'
             
             if z_score is not None:
                 watermark_scores.append(z_score)
@@ -157,6 +186,7 @@ def process_single_file(file_path: str, target_tprs: List[float] = [0.90, 0.95, 
     return {
         'file': os.path.basename(file_path),
         'metadata': metadata,
+        'z_score_version': z_score_version,  # Track which z-score version was used
         'thresholds': threshold_results,
         'statistics': {
             'total_samples': len(watermark_scores),
@@ -202,7 +232,7 @@ def save_csv_results(all_results: List[Dict], input_dir: str, output_dir: str, t
     headers = [
         'file', 'dataset', 'model', 'strategy', 'ratio', 'delta', 'key', 'prebias',
         'vocab_size', 'remasking', 'steps', 'gen_length', 'block_length', 'temperature',
-        'cfg_scale', 'batch_size', 'mean_zscore', 'std_zscore', 'min_zscore', 'max_zscore',
+        'cfg_scale', 'batch_size', 'z_score_version', 'mean_zscore', 'std_zscore', 'min_zscore', 'max_zscore',
         'median_zscore', 'total_samples'
     ]
     
@@ -235,6 +265,7 @@ def save_csv_results(all_results: List[Dict], input_dir: str, output_dir: str, t
                 'temperature': meta.get('temperature'),
                 'cfg_scale': meta.get('cfg_scale'),
                 'batch_size': meta.get('batch_size'),
+                'z_score_version': result.get('z_score_version', 'unknown'),
                 'mean_zscore': result['statistics']['mean'],
                 'std_zscore': result['statistics']['std'],
                 'min_zscore': result['statistics']['min'],
@@ -254,7 +285,7 @@ def save_csv_results(all_results: List[Dict], input_dir: str, output_dir: str, t
     print(f"\nCSV saved to: {csv_path}")
 
 
-def process_watermarked_files(input_dir: str, output_dir: Optional[str] = None, target_tprs: List[float] = [0.90, 0.95, 0.99, 0.999]) -> None:
+def process_watermarked_files(input_dir: str, output_dir: Optional[str] = None, target_tprs: List[float] = [0.90, 0.95, 0.99, 0.999], z_score_type: str = 'auto') -> None:
     """
     Process JSON files to calculate z-score thresholds for watermarked content only.
     Each file is processed separately.
@@ -263,6 +294,7 @@ def process_watermarked_files(input_dir: str, output_dir: Optional[str] = None, 
         input_dir: Directory containing JSON files with z-scores
         output_dir: Directory to save output CSV files (defaults to input_dir)
         target_tprs: List of target true positive rates
+        z_score_type: Which z-score to use ('original', 'truncated', 'attacked', 'auto')
     """
     # Default output directory to input directory if not specified
     if output_dir is None:
@@ -288,10 +320,13 @@ def process_watermarked_files(input_dir: str, output_dir: Optional[str] = None, 
                 if isinstance(data, list) and len(data) > 0:
                     first_item = data[0]
                     # Check for z_score in various possible locations
-                    has_zscore = (
-                        'z_score' in first_item or
-                        ('watermark' in first_item and first_item.get('watermark') and 'z_score' in first_item['watermark'])
-                    )
+                    has_zscore = False
+                    if 'watermark' in first_item and first_item.get('watermark'):
+                        wm = first_item['watermark']
+                        has_zscore = any(key in wm for key in ['z_score', 'z_score_original', 'z_score_truncated', 'z_score_attacked'])
+                    elif 'z_score' in first_item:
+                        has_zscore = True
+                    
                     if has_zscore:
                         valid_files.append(json_file)
         except (json.JSONDecodeError, KeyError, TypeError):
@@ -308,7 +343,7 @@ def process_watermarked_files(input_dir: str, output_dir: Optional[str] = None, 
     
     for json_file in tqdm(json_files, desc="Processing files"):
         file_path = os.path.join(input_dir, json_file)
-        file_results = process_single_file(file_path, target_tprs)
+        file_results = process_single_file(file_path, target_tprs, z_score_type)
         
         if file_results:
             all_results.append(file_results)
@@ -316,6 +351,7 @@ def process_watermarked_files(input_dir: str, output_dir: Optional[str] = None, 
             # Print results for this file
             print(f"\n{'='*70}")
             print(f"File: {json_file}")
+            print(f"Z-score version: {file_results.get('z_score_version', 'unknown')}")
             print(f"Samples: {file_results['statistics']['total_samples']}")
             print(f"Mean z-score: {file_results['statistics']['mean']:.4f}")
             print(f"{'='*70}")
@@ -384,6 +420,14 @@ def main():
         help="Target true positive rates (default: 0.90 0.95 0.99 0.999)"
     )
     
+    parser.add_argument(
+        "--z-score-type",
+        type=str,
+        default="auto",
+        choices=["original", "truncated", "attacked", "auto"],
+        help="Which z-score type to analyze (default: auto - uses original if available, then truncated, then attacked)"
+    )
+    
     args = parser.parse_args()
     
     # Check if input directory exists
@@ -396,7 +440,7 @@ def main():
         return
     
     # Process files
-    process_watermarked_files(args.input, args.output, args.tpr)
+    process_watermarked_files(args.input, args.output, args.tpr, args.z_score_type)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,29 @@ from dmark.watermark.config import WatermarkConfig
 from dmark.watermark.watermark import Watermark
 
 
+# Constants
+EOS_TOKENS = {126081, 126348}  # Special tokens to skip
+
+
+def get_previous_token(index: int, output_ids: List[int], prompt_ids: List[int]) -> int:
+    """Get the previous token for green list generation.
+    
+    Args:
+        index: Current position in output_ids
+        output_ids: List of generated token IDs
+        prompt_ids: List of prompt token IDs
+    
+    Returns:
+        Previous token ID
+    """
+    if index > 0:
+        return output_ids[index - 1]
+    elif prompt_ids:
+        return prompt_ids[-1]
+    else:
+        return 0
+
+
 def calculate_zscore(
     output_ids: List[int],
     watermark: Watermark,
@@ -33,26 +56,19 @@ def calculate_zscore(
     gen_len = 0
     
     # Limit to max_tokens if specified
-    tokens_to_check = len(output_ids) if max_tokens is None else min(max_tokens, len(output_ids))
+    tokens_to_check = min(len(output_ids), max_tokens) if max_tokens else len(output_ids)
     
     for index in range(tokens_to_check):
         curr_token = output_ids[index]
         
         # Skip special tokens (EOS tokens)
-        if curr_token == 126081 or curr_token == 126348:
+        if curr_token in EOS_TOKENS:
             break
-            
-        # Always use i-1 token as previous token, regardless of strategy
-        if index > 0:
-            prev_token = output_ids[index - 1]
-        else:
-            # If index is 0, use last token of prompt
-            if len(prompt_ids) > 0:
-                prev_token = prompt_ids[-1]
-            else:
-                prev_token = 0
         
-        # Generate green list using Watermark class (more efficient)
+        # Get previous token for green list generation
+        prev_token = get_previous_token(index, output_ids, prompt_ids)
+        
+        # Check if current token is in green list
         green_list = watermark.gen_green_list(prev_token).bool()
         if green_list[curr_token]:
             detected += 1
@@ -61,10 +77,100 @@ def calculate_zscore(
     if gen_len == 0:
         return 0.0, 0.0
     
+    # Calculate statistics
     detection_rate = detected / gen_len
-    z_score = (detected - gen_len * watermark.watermark_config.ratio) / math.sqrt(gen_len * watermark.watermark_config.ratio * (1 - watermark.watermark_config.ratio))
+    ratio = watermark.watermark_config.ratio
+    expected = gen_len * ratio
+    variance = gen_len * ratio * (1 - ratio)
+    z_score = (detected - expected) / math.sqrt(variance) if variance > 0 else 0.0
     
     return detection_rate, z_score
+
+
+def process_single_result(
+    result: dict,
+    watermark: Watermark,
+    prompt_ids: List[int],
+    max_tokens: int = None
+) -> None:
+    """Process a single result entry and add z-scores.
+    
+    Args:
+        result: Single result dictionary to process
+        watermark: Watermark instance for detection
+        prompt_ids: List of prompt token IDs
+        max_tokens: Maximum tokens to analyze
+    """
+    # Initialize watermark dict if not present
+    if "watermark" not in result:
+        result["watermark"] = {}
+    
+    # Process different ID types with their corresponding z-score fields
+    id_mappings = [
+        ("output_ids", "z_score_original", "detection_rate_original"),
+        ("truncated_output_ids", "z_score_truncated", "detection_rate_truncated"),
+        ("attacked_ids", "z_score_attacked", "detection_rate_attacked")
+    ]
+    
+    for id_field, z_field, rate_field in id_mappings:
+        if id_field in result.get("data", {}):
+            ids = result["data"][id_field]
+            detection_rate, z_score = calculate_zscore(ids, watermark, prompt_ids, max_tokens)
+            result["watermark"][z_field] = z_score
+            result["watermark"][rate_field] = detection_rate
+
+
+def print_statistics(results: List[dict], output_file: str) -> None:
+    """Print z-score statistics for processed results.
+    
+    Args:
+        results: List of processed result dictionaries
+        output_file: Path where results were saved
+    """
+    print(f"Processed {len(results)} results")
+    print(f"Results saved to: {output_file}")
+    print("\n--- Z-score Statistics ---")
+    
+    # Define score types to analyze
+    score_types = [
+        ("Original", "z_score_original"),
+        ("Truncated", "z_score_truncated"),
+        ("Attacked", "z_score_attacked")
+    ]
+    
+    for label, field in score_types:
+        # Extract scores for this type
+        scores = [r["watermark"][field] for r in results 
+                 if r.get("watermark") and field in r["watermark"]]
+        
+        if scores:
+            avg_z = sum(scores) / len(scores)
+            min_z = min(scores)
+            max_z = max(scores)
+            print(f"{label} output: avg={avg_z:.2f}, min={min_z:.2f}, max={max_z:.2f} (n={len(scores)})")
+
+
+def initialize_watermark(watermark_metadata: dict, bitmap_file: str) -> Watermark:
+    """Initialize watermark from metadata.
+    
+    Args:
+        watermark_metadata: Dictionary containing watermark configuration
+        bitmap_file: Path to bitmap file
+    
+    Returns:
+        Initialized Watermark instance
+    """
+    config = WatermarkConfig(
+        vocab_size=watermark_metadata.get("vocab_size", 126464),
+        ratio=watermark_metadata.get("ratio", 0.5),
+        delta=watermark_metadata.get("delta", 2.0),
+        key=watermark_metadata.get("key", 42),
+        prebias=watermark_metadata.get("prebias", False),
+        strategy=watermark_metadata.get("strategy", "normal"),
+        bitmap_path=bitmap_file
+    )
+    bitmap = PersistentBitmap(config.vocab_size, config.bitmap_path)
+    return Watermark(config, bitmap)
 
 
 def process_json_file(
@@ -87,203 +193,126 @@ def process_json_file(
     with open(input_file, 'r') as f:
         results = json.load(f)
     
-    # Initialize tokenizer
-    if results[0].get("watermark_metadata") is None:
-        return 
+    # Check for watermark metadata
+    if not results or not results[0].get("watermark_metadata"):
+        print(f"Skipping {input_file}: no watermark metadata found")
+        return
     
-    # Extract watermark configuration
-    wm_meta = results[0]["watermark_metadata"]
-    watermark_config = WatermarkConfig(
-        vocab_size=wm_meta.get("vocab_size", 126464),
-        ratio=wm_meta.get("ratio", 0.5),
-        delta=wm_meta.get("delta", 2.0),
-        key=wm_meta.get("key", 42),
-        prebias=wm_meta.get("prebias", False),
-        strategy=wm_meta.get("strategy", "normal"),
-        bitmap_path=bitmap_file
-    )
+    # Initialize components
+    watermark = initialize_watermark(results[0]["watermark_metadata"], bitmap_file)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    bitmap = PersistentBitmap(watermark_config.vocab_size, watermark_config.bitmap_path)
-    watermark = Watermark(watermark_config, bitmap)
     
     # Process each result
     for result in tqdm(results, desc="Processing results"):
-        # Tokenize prompt to get prompt_ids (used for all versions)
+        # Get prompt IDs
         prompt_text = result["data"].get("prompt", "")
-        if prompt_text:
-            prompt_ids = tokenizer.encode(prompt_text, add_special_tokens=False)
-        else:
-            prompt_ids = []
+        prompt_ids = tokenizer.encode(prompt_text, add_special_tokens=False) if prompt_text else []
         
-        # Initialize watermark dict if not present
-        if "watermark" not in result:
-            result["watermark"] = {}
-        
-        # Calculate z-score for original output_ids
-        if "output_ids" in result["data"]:
-            output_ids = result["data"]["output_ids"]
-            detection_rate, z_score = calculate_zscore(
-                output_ids,
-                watermark,
-                prompt_ids,
-                max_tokens
-            )
-            result["watermark"]["z_score_original"] = z_score
-            result["watermark"]["detection_rate_original"] = detection_rate
-        
-        # Calculate z-score for truncated_output_ids
-        if "truncated_output_ids" in result["data"]:
-            truncated_ids = result["data"]["truncated_output_ids"]
-            detection_rate, z_score = calculate_zscore(
-                truncated_ids,
-                watermark,
-                prompt_ids,
-                max_tokens
-            )
-            result["watermark"]["z_score_truncated"] = z_score
-            result["watermark"]["detection_rate_truncated"] = detection_rate
-        
-        # Calculate z-score for attacked_ids
-        if "attacked_ids" in result["data"]:
-            attacked_ids = result["data"]["attacked_ids"]
-            detection_rate, z_score = calculate_zscore(
-                attacked_ids,
-                watermark,
-                prompt_ids,
-                max_tokens
-            )
-            result["watermark"]["z_score_attacked"] = z_score
-            result["watermark"]["detection_rate_attacked"] = detection_rate
+        # Process this result
+        process_single_result(result, watermark, prompt_ids, max_tokens)
     
     # Save results to new file
     with open(output_file, 'w') as f:
         json.dump(results, f, indent=4)
     
-    print(f"Processed {len(results)} results")
-    print(f"Results saved to: {output_file}")
+    # Print statistics
+    print_statistics(results, output_file)
+
+
+def find_json_files(input_dir: str, tag: str) -> List[str]:
+    """Find JSON files to process, excluding already tagged and metadata files.
     
-    # Print summary statistics for each version
-    print("\n--- Z-score Statistics ---")
+    Args:
+        input_dir: Directory to search for JSON files
+        tag: Tag to exclude from search
     
-    # Original output statistics
-    z_scores_original = [r["watermark"]["z_score_original"] for r in results 
-                         if r.get("watermark") is not None and r["watermark"].get("z_score_original") is not None]
-    if z_scores_original:
-        avg_z = sum(z_scores_original) / len(z_scores_original)
-        max_z = max(z_scores_original)
-        min_z = min(z_scores_original)
-        print(f"Original output: avg={avg_z:.2f}, min={min_z:.2f}, max={max_z:.2f} (n={len(z_scores_original)})")
+    Returns:
+        List of JSON file names to process
+    """
+    tag_suffix = f"_{tag}.json"
+    return [f for f in os.listdir(input_dir)
+            if f.endswith('.json')
+            and not f.endswith(tag_suffix)
+            and not f.startswith('_')]
+
+
+def process_directory(input_dir: str, output_dir: str, tag: str, bitmap: str, model: str, max_tokens: int) -> None:
+    """Process all JSON files in a directory.
     
-    # Truncated output statistics
-    z_scores_truncated = [r["watermark"]["z_score_truncated"] for r in results 
-                          if r.get("watermark") is not None and r["watermark"].get("z_score_truncated") is not None]
-    if z_scores_truncated:
-        avg_z = sum(z_scores_truncated) / len(z_scores_truncated)
-        max_z = max(z_scores_truncated)
-        min_z = min(z_scores_truncated)
-        print(f"Truncated output: avg={avg_z:.2f}, min={min_z:.2f}, max={max_z:.2f} (n={len(z_scores_truncated)})")
+    Args:
+        input_dir: Input directory path
+        output_dir: Output directory path
+        tag: Tag to append to output files
+        bitmap: Path to bitmap file
+        model: Model name for tokenizer
+        max_tokens: Maximum tokens to analyze
+    """
+    # Find files to process
+    json_files = find_json_files(input_dir, tag)
     
-    # Attacked output statistics
-    z_scores_attacked = [r["watermark"]["z_score_attacked"] for r in results 
-                         if r.get("watermark") is not None and r["watermark"].get("z_score_attacked") is not None]
-    if z_scores_attacked:
-        avg_z = sum(z_scores_attacked) / len(z_scores_attacked)
-        max_z = max(z_scores_attacked)
-        min_z = min(z_scores_attacked)
-        print(f"Attacked output: avg={avg_z:.2f}, min={min_z:.2f}, max={max_z:.2f} (n={len(z_scores_attacked)})")
+    if not json_files:
+        print(f"No JSON files found in directory: {input_dir}")
+        return
+    
+    print(f"Found {len(json_files)} JSON files to process")
+    print(f"Output directory: {output_dir}")
+    
+    # Process each file
+    for json_file in json_files:
+        input_path = os.path.join(input_dir, json_file)
+        output_name = json_file.replace(".json", f"_{tag}.json")
+        output_path = os.path.join(output_dir, output_name)
+        
+        print(f"\nProcessing: {json_file}")
+        process_json_file(input_path, output_path, bitmap, model, max_tokens)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Calculate z-scores for watermark detection")
-    parser.add_argument(
-        "--input",
-        type=str,
-        required=True,
-        help="Path to input directory or JSON file containing generation results"
-    )
-    parser.add_argument(
-        "--output",
-        type=str,
-        default=None,
-        help="Output directory path (default: {input_dir}_zscore for directories, same dir for files)"
-    )
-    parser.add_argument(
-        "--tag",
-        type=str,
-        default="zscore",
-        help="Tag to append to output files/directory (default: zscore)"
-    )
-    parser.add_argument(
-        "--bitmap",
-        type=str,
-        default="bitmap.bin",
-        help="Path to bitmap file for watermark detection (default: bitmap.bin)"
-    )
-    parser.add_argument(
-        "--model",
-        type=str,
-        default="GSAI-ML/LLaDA-8B-Instruct",
-        help="Model name for tokenizer (default: GSAI-ML/LLaDA-8B-Instruct)"
-    )
-    parser.add_argument(
-        "--max_tokens",
-        type=int,
-        default=200,
-        help="Maximum number of tokens to analyze (default: all tokens)"
-    )
+    parser.add_argument("--input", type=str, required=True,
+                       help="Path to input directory or JSON file")
+    parser.add_argument("--output", type=str, default=None,
+                       help="Output directory path (default: auto-generated)")
+    parser.add_argument("--tag", type=str, default="zscore",
+                       help="Tag to append to output files (default: zscore)")
+    parser.add_argument("--bitmap", type=str, default="bitmap.bin",
+                       help="Path to bitmap file (default: bitmap.bin)")
+    parser.add_argument("--model", type=str, default="GSAI-ML/LLaDA-8B-Instruct",
+                       help="Model name for tokenizer")
+    parser.add_argument("--max_tokens", type=int, default=200,
+                       help="Maximum number of tokens to analyze")
     
     args = parser.parse_args()
     
-    # Check if input exists
+    # Validate input
     if not os.path.exists(args.input):
         print(f"Error: Input path '{args.input}' not found")
         return
     
-    # Determine output directory based on input type
+    # Process based on input type
     if os.path.isdir(args.input):
-        # Input is directory
+        # Determine output directory
         if args.output:
             output_dir = args.output
         else:
-            # Default: {input_dir}_{tag}
             input_dirname = os.path.basename(os.path.normpath(args.input))
             parent_dir = os.path.dirname(os.path.normpath(args.input))
             output_dir = os.path.join(parent_dir, f"{input_dirname}_{args.tag}")
         
-        # Create output directory
+        # Create output directory and process files
         os.makedirs(output_dir, exist_ok=True)
+        process_directory(args.input, output_dir, args.tag, args.bitmap, args.model, args.max_tokens)
         
-        # Process all JSON files in directory (excluding already tagged files and metadata files)
-        tag_suffix = f"_{args.tag}.json"
-        json_files = [f for f in os.listdir(args.input) 
-                     if f.endswith('.json') and not f.endswith(tag_suffix) and not f.startswith('_')]
-        
-        if not json_files:
-            print(f"No JSON files found in directory: {args.input}")
-            return
-        
-        print(f"Found {len(json_files)} JSON files to process")
-        print(f"Output directory: {output_dir}")
-        
-        for json_file in json_files:
-            input_path = os.path.join(args.input, json_file)
-            output_name = json_file.replace(".json", f"_{args.tag}.json")
-            output_path = os.path.join(output_dir, output_name)
-            
-            print(f"\nProcessing: {json_file}")
-            process_json_file(input_path, output_path, args.bitmap, args.model, args.max_tokens)
-            
     elif os.path.isfile(args.input):
-        # Input is a file
+        # Determine output file path
         if args.output:
-            # Save to specified output directory
             os.makedirs(args.output, exist_ok=True)
             base_name = os.path.basename(args.input).replace(".json", f"_{args.tag}.json")
             output_file = os.path.join(args.output, base_name)
         else:
-            # Save alongside input file with tag
             output_file = args.input.replace(".json", f"_{args.tag}.json")
         
+        # Process single file
         process_json_file(args.input, output_file, args.bitmap, args.model, args.max_tokens)
     else:
         print(f"Error: '{args.input}' is neither a file nor a directory")

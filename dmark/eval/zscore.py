@@ -62,7 +62,7 @@ def calculate_zscore(
         return 0.0, 0.0
     
     detection_rate = detected / gen_len
-    z_score = 2 * (detected - gen_len * watermark.watermark_config.ratio) / math.sqrt(gen_len)
+    z_score = (detected - gen_len * watermark.watermark_config.ratio) / math.sqrt(gen_len * watermark.watermark_config.ratio * (1 - watermark.watermark_config.ratio))
     
     return detection_rate, z_score
 
@@ -183,7 +183,7 @@ def main():
     parser.add_argument(
         "--max_tokens",
         type=int,
-        default=None,
+        default=200,
         help="Maximum number of tokens to analyze (default: all tokens)"
     )
     

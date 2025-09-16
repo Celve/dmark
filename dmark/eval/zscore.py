@@ -178,7 +178,8 @@ def process_json_file(
     output_file: str,
     bitmap_file: str = "bitmap.bin",
     model_name: str = "facebook/llada-760m-split2",
-    max_tokens: int = None
+    max_tokens: int = None,
+    manual_config: dict = None
 ) -> None:
     """Process a JSON file containing generation results and add z-scores.
     
@@ -188,18 +189,33 @@ def process_json_file(
         bitmap_file: Path to bitmap file for watermark detection
         model_name: Model name for tokenizer
         max_tokens: Maximum number of tokens to analyze (None = analyze all)
+        manual_config: Manual watermark config to use if no metadata in JSON
     """
     # Load the JSON data
     with open(input_file, 'r') as f:
         results = json.load(f)
     
-    # Check for watermark metadata
-    if not results or not results[0].get("watermark_metadata"):
-        print(f"Skipping {input_file}: no watermark metadata found")
+    if not results:
+        print(f"Skipping {input_file}: empty file")
+        return
+    
+    # Try to get watermark config from JSON metadata or use manual config
+    watermark_metadata = None
+    if results[0].get("watermark_metadata"):
+        watermark_metadata = results[0]["watermark_metadata"]
+        print(f"Using watermark metadata from JSON file")
+    elif manual_config:
+        watermark_metadata = manual_config
+        print(f"Using manual watermark configuration (no metadata in JSON)")
+        # Add metadata to results for consistency
+        for result in results:
+            result["watermark_metadata"] = manual_config
+    else:
+        print(f"Skipping {input_file}: no watermark metadata found and no manual config provided")
         return
     
     # Initialize components
-    watermark = initialize_watermark(results[0]["watermark_metadata"], bitmap_file)
+    watermark = initialize_watermark(watermark_metadata, bitmap_file)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     
     # Process each result
@@ -236,7 +252,7 @@ def find_json_files(input_dir: str, tag: str) -> List[str]:
             and not f.startswith('_')]
 
 
-def process_directory(input_dir: str, output_dir: str, tag: str, bitmap: str, model: str, max_tokens: int) -> None:
+def process_directory(input_dir: str, output_dir: str, tag: str, bitmap: str, model: str, max_tokens: int, manual_config: dict = None) -> None:
     """Process all JSON files in a directory.
     
     Args:
@@ -246,6 +262,7 @@ def process_directory(input_dir: str, output_dir: str, tag: str, bitmap: str, mo
         bitmap: Path to bitmap file
         model: Model name for tokenizer
         max_tokens: Maximum tokens to analyze
+        manual_config: Manual watermark config to use if no metadata in JSON
     """
     # Find files to process
     json_files = find_json_files(input_dir, tag)
@@ -257,6 +274,9 @@ def process_directory(input_dir: str, output_dir: str, tag: str, bitmap: str, mo
     print(f"Found {len(json_files)} JSON files to process")
     print(f"Output directory: {output_dir}")
     
+    if manual_config:
+        print(f"Manual watermark config provided: ratio={manual_config['ratio']}, delta={manual_config['delta']}, key={manual_config['key']}")
+    
     # Process each file
     for json_file in json_files:
         input_path = os.path.join(input_dir, json_file)
@@ -264,7 +284,7 @@ def process_directory(input_dir: str, output_dir: str, tag: str, bitmap: str, mo
         output_path = os.path.join(output_dir, output_name)
         
         print(f"\nProcessing: {json_file}")
-        process_json_file(input_path, output_path, bitmap, model, max_tokens)
+        process_json_file(input_path, output_path, bitmap, model, max_tokens, manual_config)
 
 
 def main():
@@ -282,12 +302,49 @@ def main():
     parser.add_argument("--max_tokens", type=int, default=200,
                        help="Maximum number of tokens to analyze")
     
+    # Watermark configuration arguments (used when no metadata in JSON)
+    parser.add_argument("--vocab_size", type=int, default=126464,
+                       help="Vocabulary size for watermark (default: 126464)")
+    parser.add_argument("--ratio", type=float, default=0.5,
+                       help="Green list ratio for watermark (default: 0.5)")
+    parser.add_argument("--delta", type=float, default=2.0,
+                       help="Watermark strength parameter (default: 2.0)")
+    parser.add_argument("--key", type=int, default=42,
+                       help="Random seed for watermark hash function (default: 42)")
+    parser.add_argument("--prebias", action="store_true",
+                       help="Apply watermark bias before token selection")
+    parser.add_argument("--strategy", type=str, default="normal",
+                       choices=["normal", "predict", "reverse", "legacy-ahead", "legacy-both"],
+                       help="Watermark strategy (default: normal)")
+    parser.add_argument("--use_manual_config", action="store_true",
+                       help="Force use of manual config even if metadata exists in JSON")
+    
     args = parser.parse_args()
     
     # Validate input
     if not os.path.exists(args.input):
         print(f"Error: Input path '{args.input}' not found")
         return
+    
+    # Build manual config dictionary if needed
+    manual_config = None
+    if args.use_manual_config or any([
+        args.vocab_size != 126464,
+        args.ratio != 0.5,
+        args.delta != 2.0,
+        args.key != 42,
+        args.prebias,
+        args.strategy != "normal"
+    ]):
+        manual_config = {
+            "vocab_size": args.vocab_size,
+            "ratio": args.ratio,
+            "delta": args.delta,
+            "key": args.key,
+            "prebias": args.prebias,
+            "strategy": args.strategy
+        }
+        print(f"Manual watermark configuration enabled")
     
     # Process based on input type
     if os.path.isdir(args.input):
@@ -301,7 +358,7 @@ def main():
         
         # Create output directory and process files
         os.makedirs(output_dir, exist_ok=True)
-        process_directory(args.input, output_dir, args.tag, args.bitmap, args.model, args.max_tokens)
+        process_directory(args.input, output_dir, args.tag, args.bitmap, args.model, args.max_tokens, manual_config)
         
     elif os.path.isfile(args.input):
         # Determine output file path
@@ -313,7 +370,7 @@ def main():
             output_file = args.input.replace(".json", f"_{args.tag}.json")
         
         # Process single file
-        process_json_file(args.input, output_file, args.bitmap, args.model, args.max_tokens)
+        process_json_file(args.input, output_file, args.bitmap, args.model, args.max_tokens, manual_config)
     else:
         print(f"Error: '{args.input}' is neither a file nor a directory")
         return

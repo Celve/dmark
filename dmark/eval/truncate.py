@@ -203,8 +203,8 @@ def process_directory(
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
     
-    # Find all JSON files
-    json_files = sorted([f for f in os.listdir(input_dir) if f.endswith('.json')])
+    # Find all JSON files (excluding metadata files starting with _)
+    json_files = sorted([f for f in os.listdir(input_dir) if f.endswith('.json') and not f.startswith('_')])
     
     if not json_files:
         print(f"No JSON files found in {input_dir}")

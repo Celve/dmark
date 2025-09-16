@@ -138,10 +138,10 @@ def main():
         # Create output directory
         os.makedirs(output_dir, exist_ok=True)
         
-        # Process all JSON files in directory (excluding already tagged files)
+        # Process all JSON files in directory (excluding already tagged files and metadata files)
         tag_suffix = f"_{args.tag}.json"
         json_files = [f for f in os.listdir(args.input) 
-                     if f.endswith('.json') and not f.endswith(tag_suffix)]
+                     if f.endswith('.json') and not f.endswith(tag_suffix) and not f.startswith('_')]
         
         if not json_files:
             print(f"No JSON files found in directory: {args.input}")

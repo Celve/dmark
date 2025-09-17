@@ -5,6 +5,7 @@ import os
 from typing import List, Dict, Optional
 import numpy as np
 from tqdm import tqdm
+from datetime import datetime
 
 
 def calculate_thresholds_for_fpr(z_scores: List[float], target_fprs: List[float] = [0.001, 0.01, 0.05, 0.10]) -> Dict[float, float]:
@@ -48,48 +49,33 @@ def calculate_thresholds_for_fpr(z_scores: List[float], target_fprs: List[float]
     return thresholds
 
 
-def extract_metadata_from_results(results: List[Dict]) -> Dict[str, Optional[str]]:
+def extract_generation_config(results: List[Dict]) -> Dict[str, Optional[str]]:
     """
-    Extract metadata from the first non-watermarked instance in results.
+    Extract generation configuration from results.
     
     Args:
         results: List of result dictionaries
     
     Returns:
-        Dictionary with extracted metadata
+        Dictionary with generation configuration
     """
-    metadata = {
-        'dataset': None,
-        'model': None,
-        'has_watermark': False,
-        'steps': None,
-        'gen_length': None,
-        'block_length': None,
-        'temperature': None,
-        'cfg_scale': None,
-        'device': None,
-        'batch_size': None,
-        'remasking': None
-    }
+    config = {}
     
     # Find first result with metadata
     for result in results:
-        # Check generation metadata
         if 'generation_metadata' in result:
             gen_meta = result['generation_metadata']
-            metadata['model'] = gen_meta.get('model')
-            metadata['dataset'] = gen_meta.get('dataset')
-            metadata['steps'] = gen_meta.get('steps')
-            metadata['gen_length'] = gen_meta.get('gen_length')
-            metadata['block_length'] = gen_meta.get('block_length')
-            metadata['temperature'] = gen_meta.get('temperature')
-            metadata['cfg_scale'] = gen_meta.get('cfg_scale')
-            metadata['remasking'] = gen_meta.get('remasking')
-            metadata['device'] = gen_meta.get('device')
-            metadata['batch_size'] = gen_meta.get('batch_size')
-            break  # Found metadata, stop looking
+            config['model'] = gen_meta.get('model')
+            config['dataset'] = gen_meta.get('dataset')
+            config['steps'] = gen_meta.get('steps')
+            config['gen_length'] = gen_meta.get('gen_length')
+            config['block_length'] = gen_meta.get('block_length')
+            config['temperature'] = gen_meta.get('temperature')
+            config['cfg_scale'] = gen_meta.get('cfg_scale')
+            config['remasking'] = gen_meta.get('remasking')
+            break
     
-    return metadata
+    return config
 
 
 def process_single_file(file_path: str, target_fprs: List[float] = [0.001, 0.01, 0.05, 0.10], z_score_type: str = 'auto') -> Dict:
@@ -107,8 +93,8 @@ def process_single_file(file_path: str, target_fprs: List[float] = [0.001, 0.01,
     with open(file_path, 'r') as f:
         results = json.load(f)
     
-    # Extract metadata from the results
-    metadata = extract_metadata_from_results(results)
+    # Extract configuration from the results
+    config = extract_generation_config(results)
     
     # Collect z-scores from non-watermarked samples only
     non_watermark_scores = []
@@ -174,11 +160,11 @@ def process_single_file(file_path: str, target_fprs: List[float] = [0.001, 0.01,
     
     return {
         'file': os.path.basename(file_path),
-        'metadata': metadata,
-        'z_score_version': z_score_version,  # Track which z-score version was used
+        'config': config,
+        'z_score_version': z_score_version,
         'thresholds': threshold_results,
         'statistics': {
-            'total_samples': len(non_watermark_scores),
+            'n_samples': len(non_watermark_scores),
             'mean': float(np.mean(non_watermark_scores)),
             'std': float(np.std(non_watermark_scores)),
             'min': float(np.min(non_watermark_scores)),
@@ -192,11 +178,57 @@ def process_single_file(file_path: str, target_fprs: List[float] = [0.001, 0.01,
                 '99.99%': float(np.percentile(non_watermark_scores, 99.99))
             }
         },
-        'z_scores': non_watermark_scores  # Include raw scores for further analysis if needed
+        'z_scores': non_watermark_scores
     }
 
 
-def save_results(all_results: List[Dict], output_path: str, target_fprs: List[float]) -> None:
+def generate_threshold_json(all_results: List[Dict], target_fprs: List[float], z_score_type: str) -> Dict:
+    """
+    Generate threshold JSON structure from results.
+    
+    Args:
+        all_results: List of analysis results from each file
+        target_fprs: List of target false positive rates
+        z_score_type: Which z-score type was used
+    
+    Returns:
+        Dictionary with threshold configuration structure
+    """
+    configurations = []
+    
+    for result in all_results:
+        # Extract threshold values as a simple dict
+        threshold_dict = {}
+        for threshold_info in result['thresholds']:
+            fpr_key = str(threshold_info['target_fpr'])
+            threshold_dict[fpr_key] = round(threshold_info['threshold'], 4)
+        
+        config_entry = {
+            'config': result['config'],
+            'thresholds': threshold_dict,
+            'statistics': {
+                'mean': round(result['statistics']['mean'], 4),
+                'std': round(result['statistics']['std'], 4),
+                'min': round(result['statistics']['min'], 4),
+                'max': round(result['statistics']['max'], 4),
+                'median': round(result['statistics']['median'], 4),
+                'n_samples': result['statistics']['n_samples']
+            }
+        }
+        configurations.append(config_entry)
+    
+    return {
+        'version': '1.0',
+        'metadata': {
+            'created_at': datetime.now().isoformat(),
+            'z_score_type': z_score_type,
+            'target_fprs': target_fprs
+        },
+        'configurations': configurations
+    }
+
+
+def save_results(all_results: List[Dict], output_path: str, target_fprs: List[float], z_score_type: str) -> None:
     """
     Save FPR threshold analysis results to JSON and CSV files.
     
@@ -204,12 +236,20 @@ def save_results(all_results: List[Dict], output_path: str, target_fprs: List[fl
         all_results: List of analysis results from each file
         output_path: Path to save output files (without extension)
         target_fprs: List of target false positive rates
+        z_score_type: Which z-score type was used
     """
-    # Save JSON with full results
-    json_path = output_path + '_fpr_thresholds.json'
-    with open(json_path, 'w') as f:
+    # Generate and save threshold configuration JSON
+    threshold_config = generate_threshold_json(all_results, target_fprs, z_score_type)
+    config_json_path = output_path + '_threshold_config.json'
+    with open(config_json_path, 'w') as f:
+        json.dump(threshold_config, f, indent=2)
+    print(f"\nThreshold configuration saved to: {config_json_path}")
+    
+    # Save full results JSON for reference
+    full_json_path = output_path + '_fpr_analysis.json'
+    with open(full_json_path, 'w') as f:
         json.dump(all_results, f, indent=2)
-    print(f"\nJSON results saved to: {json_path}")
+    print(f"Full analysis saved to: {full_json_path}")
     
     # Save CSV with summary
     csv_path = output_path + '_fpr_thresholds.csv'
@@ -232,24 +272,24 @@ def save_results(all_results: List[Dict], output_path: str, target_fprs: List[fl
         writer.writeheader()
         
         for result in all_results:
-            meta = result['metadata']
+            config = result['config']
             row = {
                 'file': result['file'],
-                'dataset': meta.get('dataset'),
-                'model': meta.get('model'),
-                'steps': meta.get('steps'),
-                'gen_length': meta.get('gen_length'),
-                'block_length': meta.get('block_length'),
-                'temperature': meta.get('temperature'),
-                'cfg_scale': meta.get('cfg_scale'),
-                'batch_size': meta.get('batch_size'),
+                'dataset': config.get('dataset'),
+                'model': config.get('model'),
+                'steps': config.get('steps'),
+                'gen_length': config.get('gen_length'),
+                'block_length': config.get('block_length'),
+                'temperature': config.get('temperature'),
+                'cfg_scale': config.get('cfg_scale'),
+                'batch_size': config.get('batch_size'),
                 'z_score_version': result.get('z_score_version', 'unknown'),
                 'mean_zscore': result['statistics']['mean'],
                 'std_zscore': result['statistics']['std'],
                 'min_zscore': result['statistics']['min'],
                 'max_zscore': result['statistics']['max'],
                 'median_zscore': result['statistics']['median'],
-                'total_samples': result['statistics']['total_samples']
+                'total_samples': result['statistics']['n_samples']
             }
             
             # Add threshold data for each FPR
@@ -364,7 +404,7 @@ def main():
             print(f"\n{'='*70}")
             print(f"File: {os.path.basename(file_path)}")
             print(f"Z-score version: {file_results.get('z_score_version', 'unknown')}")
-            print(f"Non-watermarked samples: {file_results['statistics']['total_samples']}")
+            print(f"Non-watermarked samples: {file_results['statistics']['n_samples']}")
             print(f"Mean z-score: {file_results['statistics']['mean']:.4f}")
             print(f"Std z-score: {file_results['statistics']['std']:.4f}")
             print(f"{'='*70}")
@@ -384,7 +424,7 @@ def main():
         return
     
     # Save results
-    save_results(all_results, output_path, args.fpr)
+    save_results(all_results, output_path, args.fpr, args.z_score_type)
     
     # Print overall summary
     print("\n" + "="*70)

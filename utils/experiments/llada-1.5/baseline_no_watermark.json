@@ -1,0 +1,21 @@
+{
+    "name": "llada_1.5_baseline_no_watermark",
+    "description": "Baseline LLaDA-1.5 experiments without watermarking on C4 dataset",
+    "base_command": "python -m dmark.llada.only_gen",
+    "fixed_params": {
+        "model": "GSAI-ML/LLaDA-1.5",
+        "output_dir": "results/llada-1.5/baseline",
+        "vocab_size": 126464,
+        "num_samples": 1000,
+        "minimum_output_token": 200,
+        "steps": 256,
+        "gen_length": 256,
+        "block_length": 32,
+        "cfg_scale": 0.0,
+        "temperature": 0.0,
+        "dataset": "allenai/c4"
+    },
+    "variable_params": {
+        "remasking": ["low_confidence", "random"]
+    }
+}

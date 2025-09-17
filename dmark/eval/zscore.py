@@ -168,8 +168,8 @@ def generate_bitmap_filename(ratio: float, vocab_size: int, key: int) -> str:
     Returns:
         Bitmap filename
     """
-    # Format ratio to avoid floating point issues (e.g., 0.5 -> "05")
-    ratio_str = f"{ratio:.2f}".replace(".", "")
+    # Format ratio as percentage (e.g., 0.5 -> 50, 0.25 -> 25)
+    ratio_str = int(ratio * 100)
     return f"bitmap_r{ratio_str}_v{vocab_size}_k{key}.bin"
 
 

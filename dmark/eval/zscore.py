@@ -40,7 +40,7 @@ def calculate_zscore(
     watermark: Watermark,
     prompt_ids: List[int],
     max_tokens: int = None
-) -> tuple[float, float]:
+) -> tuple[float, float, int, int]:
     """Calculate z-score for watermark detection.
     
     Args:
@@ -50,7 +50,7 @@ def calculate_zscore(
         max_tokens: Maximum number of tokens to analyze (None = analyze all)
     
     Returns:
-        Tuple of (detection_rate, z_score)
+        Tuple of (detection_rate, z_score, detected_count, gen_len)
     """
     detected = 0
     gen_len = 0
@@ -75,7 +75,7 @@ def calculate_zscore(
         gen_len += 1
     
     if gen_len == 0:
-        return 0.0, 0.0
+        return 0.0, 0.0, 0, 0
     
     # Calculate statistics
     detection_rate = detected / gen_len
@@ -84,7 +84,7 @@ def calculate_zscore(
     variance = gen_len * ratio * (1 - ratio)
     z_score = (detected - expected) / math.sqrt(variance) if variance > 0 else 0.0
     
-    return detection_rate, z_score
+    return detection_rate, z_score, detected, gen_len
 
 
 def process_single_result(
@@ -103,21 +103,28 @@ def process_single_result(
     """
     # Initialize watermark dict if not present
     if "watermark" not in result:
-        result["watermark"] = {}
+        result["watermark"] = {
+            # Add essential fields for z-score calculation
+            "ratio": watermark.watermark_config.ratio,
+            "key": watermark.watermark_config.key,
+            "vocab_size": watermark.watermark_config.vocab_size
+        }
     
     # Process different ID types with their corresponding z-score fields
     id_mappings = [
-        ("output_ids", "z_score_original", "detection_rate_original"),
-        ("truncated_output_ids", "z_score_truncated", "detection_rate_truncated"),
-        ("attacked_ids", "z_score_attacked", "detection_rate_attacked")
+        ("output_ids", "z_score_original", "detection_rate_original", "detected_original", "gen_len_original"),
+        ("truncated_output_ids", "z_score_truncated", "detection_rate_truncated", "detected_truncated", "gen_len_truncated"),
+        ("attacked_ids", "z_score_attacked", "detection_rate_attacked", "detected_attacked", "gen_len_attacked")
     ]
     
-    for id_field, z_field, rate_field in id_mappings:
+    for id_field, z_field, rate_field, detected_field, len_field in id_mappings:
         if id_field in result.get("data", {}):
             ids = result["data"][id_field]
-            detection_rate, z_score = calculate_zscore(ids, watermark, prompt_ids, max_tokens)
+            detection_rate, z_score, detected, gen_len = calculate_zscore(ids, watermark, prompt_ids, max_tokens)
             result["watermark"][z_field] = z_score
             result["watermark"][rate_field] = detection_rate
+            result["watermark"][detected_field] = detected
+            result["watermark"][len_field] = gen_len
 
 
 def print_statistics(results: List[dict], output_file: str) -> None:
@@ -209,10 +216,9 @@ def process_json_file(
         print(f"Using watermark metadata from JSON file")
     elif manual_config:
         watermark_metadata = manual_config
-        print(f"Using manual watermark configuration (no metadata in JSON)")
-        # Add metadata to results for consistency
-        for result in results:
-            result["watermark_metadata"] = manual_config
+        print(f"Using manual watermark configuration for non-watermarked content")
+        # Note: We do NOT add watermark_metadata to results for non-watermarked content
+        # It should remain None to indicate this is non-watermarked
     else:
         print(f"Skipping {input_file}: no watermark metadata found and no manual config provided")
         return

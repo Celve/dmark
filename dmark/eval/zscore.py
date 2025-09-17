@@ -157,26 +157,61 @@ def print_statistics(results: List[dict], output_file: str) -> None:
             print(f"{label} output: avg={avg_z:.2f}, min={min_z:.2f}, max={max_z:.2f} (n={len(scores)})")
 
 
-def initialize_watermark(watermark_metadata: dict, bitmap_file: str, bitmap_device: str = "cpu") -> Watermark:
+def generate_bitmap_filename(ratio: float, vocab_size: int, key: int) -> str:
+    """Generate bitmap filename from watermark parameters.
+    
+    Args:
+        ratio: Green list ratio
+        vocab_size: Vocabulary size
+        key: Random seed key
+    
+    Returns:
+        Bitmap filename
+    """
+    # Format ratio to avoid floating point issues (e.g., 0.5 -> "05")
+    ratio_str = f"{ratio:.2f}".replace(".", "")
+    return f"bitmap_r{ratio_str}_v{vocab_size}_k{key}.bin"
+
+
+def initialize_watermark(watermark_metadata: dict, bitmap_dir: str, bitmap_device: str = "cpu") -> Watermark:
     """Initialize watermark from metadata.
     
     Args:
         watermark_metadata: Dictionary containing watermark configuration
-        bitmap_file: Path to bitmap file
+        bitmap_dir: Directory containing bitmap files
         bitmap_device: Device to store the bitmap on ("cpu" or "cuda")
     
     Returns:
         Initialized Watermark instance
     """
+    # Extract essential parameters for detection
+    ratio = watermark_metadata.get("ratio", 0.5)
+    vocab_size = watermark_metadata.get("vocab_size", 126464)
+    key = watermark_metadata.get("key", 42)
+    
+    # Generate bitmap filename
+    bitmap_filename = generate_bitmap_filename(ratio, vocab_size, key)
+    bitmap_path = os.path.join(bitmap_dir, bitmap_filename)
+    
+    # Check if bitmap file exists - throw error if not
+    if not os.path.exists(bitmap_path):
+        raise FileNotFoundError(
+            f"Bitmap file not found: {bitmap_path}\n"
+            f"Expected bitmap filename: {bitmap_filename}\n"
+            f"Parameters: ratio={ratio}, vocab_size={vocab_size}, key={key}"
+        )
+    
+    # Use default values for fields not needed in detection
     config = WatermarkConfig(
-        vocab_size=watermark_metadata.get("vocab_size", 126464),
-        ratio=watermark_metadata.get("ratio", 0.5),
-        delta=watermark_metadata.get("delta", 2.0),
-        key=watermark_metadata.get("key", 42),
-        prebias=watermark_metadata.get("prebias", False),
-        strategy=watermark_metadata.get("strategy", "normal"),
-        bitmap_path=bitmap_file
+        vocab_size=vocab_size,
+        ratio=ratio,
+        delta=watermark_metadata.get("delta", 2.0),  # Not used in detection, but keep if available
+        key=key,
+        prebias=False,  # Not needed for detection
+        strategy="normal",  # Not needed for detection
+        bitmap_path=bitmap_path
     )
+    
     bitmap = PersistentBitmap(config.vocab_size, config.bitmap_path, device=bitmap_device)
     return Watermark(config, bitmap)
 
@@ -184,7 +219,7 @@ def initialize_watermark(watermark_metadata: dict, bitmap_file: str, bitmap_devi
 def process_json_file(
     input_file: str,
     output_file: str,
-    bitmap_file: str = "bitmap.bin",
+    bitmap_dir: str = ".",
     bitmap_device: str = "cpu",
     model_name: str = "facebook/llada-760m-split2",
     max_tokens: int = None,
@@ -195,7 +230,7 @@ def process_json_file(
     Args:
         input_file: Path to input JSON file
         output_file: Path to output JSON file
-        bitmap_file: Path to bitmap file for watermark detection
+        bitmap_dir: Directory containing bitmap files
         bitmap_device: Device to store the bitmap on ("cpu" or "cuda")
         model_name: Model name for tokenizer
         max_tokens: Maximum number of tokens to analyze (None = analyze all)
@@ -224,7 +259,12 @@ def process_json_file(
         return
     
     # Initialize components
-    watermark = initialize_watermark(watermark_metadata, bitmap_file, bitmap_device)
+    try:
+        watermark = initialize_watermark(watermark_metadata, bitmap_dir, bitmap_device)
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        return
+    
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     
     # Process each result
@@ -261,14 +301,14 @@ def find_json_files(input_dir: str, tag: str) -> List[str]:
             and not f.startswith('_')]
 
 
-def process_directory(input_dir: str, output_dir: str, tag: str, bitmap: str, bitmap_device: str, model: str, max_tokens: int, manual_config: dict = None) -> None:
+def process_directory(input_dir: str, output_dir: str, tag: str, bitmap_dir: str, bitmap_device: str, model: str, max_tokens: int, manual_config: dict = None) -> None:
     """Process all JSON files in a directory.
     
     Args:
         input_dir: Input directory path
         output_dir: Output directory path
         tag: Tag to append to output files
-        bitmap: Path to bitmap file
+        bitmap_dir: Directory containing bitmap files
         bitmap_device: Device to store the bitmap on ("cpu" or "cuda")
         model: Model name for tokenizer
         max_tokens: Maximum tokens to analyze
@@ -294,7 +334,7 @@ def process_directory(input_dir: str, output_dir: str, tag: str, bitmap: str, bi
         output_path = os.path.join(output_dir, output_name)
         
         print(f"\nProcessing: {json_file}")
-        process_json_file(input_path, output_path, bitmap, bitmap_device, model, max_tokens, manual_config)
+        process_json_file(input_path, output_path, bitmap_dir, bitmap_device, model, max_tokens, manual_config)
 
 
 def main():
@@ -305,8 +345,8 @@ def main():
                        help="Output directory path (default: auto-generated)")
     parser.add_argument("--tag", type=str, default="zscore",
                        help="Tag to append to output files (default: zscore)")
-    parser.add_argument("--bitmap", type=str, default="bitmap.bin",
-                       help="Path to bitmap file (default: bitmap.bin)")
+    parser.add_argument("--bitmap_dir", type=str, default=".",
+                       help="Directory containing bitmap files (default: current directory)")
     parser.add_argument("--bitmap_device", type=str, default="cpu", choices=["cpu", "cuda"],
                        help="Device to store the bitmap on (default: cpu)")
     parser.add_argument("--model", type=str, default="GSAI-ML/LLaDA-8B-Instruct",
@@ -370,7 +410,7 @@ def main():
         
         # Create output directory and process files
         os.makedirs(output_dir, exist_ok=True)
-        process_directory(args.input, output_dir, args.tag, args.bitmap, args.bitmap_device, args.model, args.max_tokens, manual_config)
+        process_directory(args.input, output_dir, args.tag, args.bitmap_dir, args.bitmap_device, args.model, args.max_tokens, manual_config)
         
     elif os.path.isfile(args.input):
         # Determine output file path
@@ -382,7 +422,7 @@ def main():
             output_file = args.input.replace(".json", f"_{args.tag}.json")
         
         # Process single file
-        process_json_file(args.input, output_file, args.bitmap, args.bitmap_device, args.model, args.max_tokens, manual_config)
+        process_json_file(args.input, output_file, args.bitmap_dir, args.bitmap_device, args.model, args.max_tokens, manual_config)
     else:
         print(f"Error: '{args.input}' is neither a file nor a directory")
         return

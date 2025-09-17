@@ -170,7 +170,7 @@ def generate_bitmap_filename(ratio: float, vocab_size: int, key: int) -> str:
     """
     # Format ratio as percentage (e.g., 0.5 -> 50, 0.25 -> 25)
     ratio_str = int(ratio * 100)
-    return f"bitmap_r{ratio_str}_v{vocab_size}_k{key}.bin"
+    return f"bitmap_v{vocab_size}_r{ratio_str}_k{key}.bin"
 
 
 def initialize_watermark(watermark_metadata: dict, bitmap_dir: str, bitmap_device: str = "cpu") -> Watermark:

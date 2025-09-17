@@ -1,0 +1,27 @@
+{
+    "name": "llada_1.5_gsm8k_watermark_experiments",
+    "description": "Comprehensive watermarking experiments on GSM8K dataset with LLaDA-1.5 model varying watermark strength, generation order, and methods",
+    "base_command": "python -m dmark.llada.only_gen",
+    "fixed_params": {
+        "model": "GSAI-ML/LLaDA-1.5",
+        "output_dir": "results/llada-1.5/gsm8k_watermark",
+        "vocab_size": 126464,
+        "num_samples": 500,
+        "bitmap_dir": "bitmaps",
+        "steps": 256,
+        "gen_length": 256,
+        "block_length": 32,
+        "temperature": 0.0,
+        "cfg_scale": 0.0,
+        "key": 42,
+        "prebias": false,
+        "minimum_output_token": 200,
+        "dataset": "gsm8k"
+    },
+    "variable_params": {
+        "delta": [1.0, 2.0, 5.0, 10.0],
+        "remasking": ["low_confidence", "random"],
+        "strategy": ["normal", "predict", "bidirectional", "predict-bidirectional"],
+        "ratio": [0.5]
+    }
+}

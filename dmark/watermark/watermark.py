@@ -36,33 +36,33 @@ class Watermark:
         if self.watermark_config.strategy == "normal":
             if prev_token is not None:
                 prev_bias = (
-                    self.bitmap.get_row(prev_token.item()).float()
+                    self.bitmap.get_row(prev_token.item()).float().to(curr_logits.device)
                     * self.watermark_config.delta
                 )
         elif self.watermark_config.strategy == "predict":
             if prev_token is None: 
                 prev_token = prev_logits.argmax(dim=-1) 
             prev_bias = (
-                self.bitmap.get_row(prev_token.item()).float()
+                self.bitmap.get_row(prev_token.item()).float().to(curr_logits.device)
                 * self.watermark_config.delta
             ) 
         elif self.watermark_config.strategy == "bidirectional":
             if prev_token is not None:
                 prev_bias = (
-                    self.bitmap.get_row(prev_token.item()).float()
+                    self.bitmap.get_row(prev_token.item()).float().to(curr_logits.device)
                     * self.watermark_config.delta
                 )
             
             if next_token is not None:
                 next_bias = (
-                    self.bitmap.get_col(next_token.item()).float()
+                    self.bitmap.get_col(next_token.item()).float().to(curr_logits.device)
                     * self.watermark_config.delta
                 )
         elif self.watermark_config.strategy == "predict-bidirectional":
             if prev_token is None:
                 prev_token = prev_logits.argmax(dim=-1)
             prev_bias = (
-                self.bitmap.get_row(prev_token.item()).float()
+                self.bitmap.get_row(prev_token.item()).float().to(curr_logits.device)
                 * self.watermark_config.delta
             )
             
@@ -70,7 +70,7 @@ class Watermark:
                 next_token = next_logits.argmax(dim=-1)
             if next_token is not None:
                 next_bias = (
-                    self.bitmap.get_col(next_token.item()).float()
+                    self.bitmap.get_col(next_token.item()).float().to(curr_logits.device)
                     * self.watermark_config.delta
                 )
         else: 
@@ -93,7 +93,7 @@ class Watermark:
         for i in range(logits.shape[0]):
             bias = (
                 (x[i, start_index - 1 : end_index - 1] != mask_id).unsqueeze(1).float()
-                * self.bitmap.get_rows(predicted[i]).float()
+                * self.bitmap.get_rows(predicted[i]).float().to(logits.device)
             ) * self.watermark_config.delta
             biased_logits[i, start_index:end_index] += bias
         return biased_logits

@@ -92,13 +92,14 @@ def extract_metadata_from_results(results: List[Dict]) -> Dict[str, Optional[str
     return metadata
 
 
-def process_single_file(file_path: str, target_fprs: List[float] = [0.001, 0.01, 0.05, 0.10]) -> Dict:
+def process_single_file(file_path: str, target_fprs: List[float] = [0.001, 0.01, 0.05, 0.10], z_score_type: str = 'auto') -> Dict:
     """
     Process a single JSON file to calculate z-score thresholds for FPR.
     
     Args:
         file_path: Path to JSON file with z-scores from non-watermarked samples
         target_fprs: List of target false positive rates
+        z_score_type: Which z-score type to use ('original', 'truncated', 'attacked', 'auto')
     
     Returns:
         Dictionary with analysis results for this file
@@ -111,16 +112,44 @@ def process_single_file(file_path: str, target_fprs: List[float] = [0.001, 0.01,
     
     # Collect z-scores from non-watermarked samples only
     non_watermark_scores = []
+    z_score_version = None
     
     for result in results:
         # Check if this is a non-watermarked sample
         if result.get('watermark_metadata') is None:
-            # Try different locations for z_score
+            # Try different locations for z_score based on type
             z_score = None
             if 'watermark' in result and result['watermark'] is not None:
-                z_score = result['watermark'].get('z_score')
-            elif 'z_score' in result:
+                wm_data = result['watermark']
+                
+                if z_score_type == 'original' and 'z_score_original' in wm_data:
+                    z_score = wm_data['z_score_original']
+                    z_score_version = 'original'
+                elif z_score_type == 'truncated' and 'z_score_truncated' in wm_data:
+                    z_score = wm_data['z_score_truncated']
+                    z_score_version = 'truncated'
+                elif z_score_type == 'attacked' and 'z_score_attacked' in wm_data:
+                    z_score = wm_data['z_score_attacked']
+                    z_score_version = 'attacked'
+                elif z_score_type == 'auto':
+                    # Auto-detect: prioritize original, then truncated, then attacked, then legacy
+                    if 'z_score_original' in wm_data:
+                        z_score = wm_data['z_score_original']
+                        z_score_version = 'original'
+                    elif 'z_score_truncated' in wm_data:
+                        z_score = wm_data['z_score_truncated']
+                        z_score_version = 'truncated'
+                    elif 'z_score_attacked' in wm_data:
+                        z_score = wm_data['z_score_attacked']
+                        z_score_version = 'attacked'
+                    elif 'z_score' in wm_data:
+                        z_score = wm_data['z_score']
+                        z_score_version = 'legacy'
+            
+            # Fallback to old location if not found in watermark dict
+            if z_score is None and 'z_score' in result:
                 z_score = result['z_score']
+                z_score_version = 'legacy'
             
             if z_score is not None:
                 non_watermark_scores.append(z_score)
@@ -146,6 +175,7 @@ def process_single_file(file_path: str, target_fprs: List[float] = [0.001, 0.01,
     return {
         'file': os.path.basename(file_path),
         'metadata': metadata,
+        'z_score_version': z_score_version,  # Track which z-score version was used
         'thresholds': threshold_results,
         'statistics': {
             'total_samples': len(non_watermark_scores),
@@ -187,7 +217,7 @@ def save_results(all_results: List[Dict], output_path: str, target_fprs: List[fl
     # Prepare CSV headers
     headers = [
         'file', 'dataset', 'model', 'steps', 'gen_length', 'block_length', 
-        'temperature', 'cfg_scale', 'batch_size', 'mean_zscore', 'std_zscore', 
+        'temperature', 'cfg_scale', 'batch_size', 'z_score_version', 'mean_zscore', 'std_zscore', 
         'min_zscore', 'max_zscore', 'median_zscore', 'total_samples'
     ]
     
@@ -213,6 +243,7 @@ def save_results(all_results: List[Dict], output_path: str, target_fprs: List[fl
                 'temperature': meta.get('temperature'),
                 'cfg_scale': meta.get('cfg_scale'),
                 'batch_size': meta.get('batch_size'),
+                'z_score_version': result.get('z_score_version', 'unknown'),
                 'mean_zscore': result['statistics']['mean'],
                 'std_zscore': result['statistics']['std'],
                 'min_zscore': result['statistics']['min'],
@@ -259,6 +290,14 @@ def main():
         help="Target false positive rates (default: 0.001 0.01 0.05 0.10)"
     )
     
+    parser.add_argument(
+        "--z-score-type",
+        type=str,
+        default="auto",
+        choices=["original", "truncated", "attacked", "auto"],
+        help="Which z-score type to analyze (default: auto - uses original if available, then truncated, then attacked)"
+    )
+    
     args = parser.parse_args()
     
     # Check if input exists
@@ -294,10 +333,13 @@ def main():
                     # Check for at least one non-watermarked sample with z_score
                     for item in data:
                         if item.get('watermark_metadata') is None:
-                            has_zscore = (
-                                'z_score' in item or
-                                ('watermark' in item and item.get('watermark') and 'z_score' in item['watermark'])
-                            )
+                            has_zscore = False
+                            if 'watermark' in item and item.get('watermark'):
+                                wm = item['watermark']
+                                has_zscore = any(key in wm for key in ['z_score', 'z_score_original', 'z_score_truncated', 'z_score_attacked'])
+                            elif 'z_score' in item:
+                                has_zscore = True
+                            
                             if has_zscore:
                                 valid_files.append(file_path)
                                 break
@@ -313,7 +355,7 @@ def main():
     all_results = []
     
     for file_path in tqdm(valid_files, desc="Processing files"):
-        file_results = process_single_file(file_path, args.fpr)
+        file_results = process_single_file(file_path, args.fpr, args.z_score_type)
         
         if file_results:
             all_results.append(file_results)
@@ -321,6 +363,7 @@ def main():
             # Print results for this file
             print(f"\n{'='*70}")
             print(f"File: {os.path.basename(file_path)}")
+            print(f"Z-score version: {file_results.get('z_score_version', 'unknown')}")
             print(f"Non-watermarked samples: {file_results['statistics']['total_samples']}")
             print(f"Mean z-score: {file_results['statistics']['mean']:.4f}")
             print(f"Std z-score: {file_results['statistics']['std']:.4f}")

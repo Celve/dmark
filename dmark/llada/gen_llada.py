@@ -260,6 +260,9 @@ def parse_args():
         "--bitmap", type=str, default="bitmapt.bin", help="Path to bitmap file"
     )
     parser.add_argument(
+        "--bitmap_device", type=str, default="cuda", choices=["cpu", "cuda"], help="Device to store the bitmap on"
+    )
+    parser.add_argument(
         "--vocab_size", type=int, default=126464, help="Vocabulary size"
     )
     parser.add_argument("--ratio", type=float, default=0.5, help="Watermark ratio")
@@ -303,6 +306,7 @@ def run_generation(
     watermark_config: WatermarkConfig,
     output_dir: Optional[str],
     enable_ppl: bool,
+    bitmap_device: str = "cuda",
 ) -> list[dict[str, Any]]:
     """Run the generation process with optional watermarking."""
     # Load dataset
@@ -310,7 +314,7 @@ def run_generation(
 
     # Set up watermarking if config is provided
     if watermark_config.strategy is not None:
-        bitmap = PersistentBitmap(watermark_config.vocab_size, watermark_config.bitmap_path)
+        bitmap = PersistentBitmap(watermark_config.vocab_size, watermark_config.bitmap_path, device=bitmap_device)
         watermark = Watermark(watermark_config, bitmap)
         enable_watermark = True
     else: 
@@ -467,6 +471,7 @@ def main():
         watermark_config=args.watermark_config,
         output_dir=args.output_dir,
         enable_ppl=args.ppl,
+        bitmap_device=args.bitmap_device,
     )
 
 

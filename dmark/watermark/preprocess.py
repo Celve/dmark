@@ -8,11 +8,11 @@ from dmark.watermark.config import WatermarkConfig
 from dmark.watermark.persistent_bitmap import PersistentBitmap
 
 
-def preprocess(watermark_config: WatermarkConfig, file_path: str):
+def preprocess(watermark_config: WatermarkConfig, file_path: str, device: str = "cuda"):
     start_time = time.time()
     print(f"Starting preprocessing for vocab_size={watermark_config.vocab_size}")
 
-    persistent_bitmap = PersistentBitmap(watermark_config.vocab_size, file_path, True)
+    persistent_bitmap = PersistentBitmap(watermark_config.vocab_size, file_path, initialize=True, device=device)
 
     for token in tqdm(range(watermark_config.vocab_size), desc="Processing tokens"):
         green_list = watermark_config.gen_green_list(torch.tensor(token)).bool()
@@ -54,6 +54,13 @@ if __name__ == "__main__":
         default=42,
         help="Random seed key for watermark (default: 42)"
     )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cuda",
+        choices=["cpu", "cuda"],
+        help="Device to create bitmap on (default: cuda)"
+    )
     
     args = parser.parse_args()
     
@@ -78,5 +85,6 @@ if __name__ == "__main__":
     
     print(f"Generating bitmap: vocab_size={args.vocab_size}, ratio={args.ratio}, key={args.key}")
     print(f"Output file: {bitmap_path}")
+    print(f"Device: {args.device}")
     
-    preprocess(watermark_config, bitmap_path)
+    preprocess(watermark_config, bitmap_path, args.device)

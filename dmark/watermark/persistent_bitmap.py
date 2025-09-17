@@ -6,9 +6,10 @@ import numpy as np
 
 
 class PersistentBitmap:
-    def __init__(self, vocab_size: int, filepath: str, initialize: bool = False):
+    def __init__(self, vocab_size: int, filepath: str, initialize: bool = False, device: str = "cuda"):
         self.vocab_size = vocab_size
         self.filepath = filepath
+        self.device = device
 
         if initialize:
             self._initialize()
@@ -22,7 +23,7 @@ class PersistentBitmap:
             self._load()
 
     def _initialize(self):
-        self.matrix = torch.zeros((self.vocab_size, self.vocab_size), dtype=torch.bool, device="cuda")
+        self.matrix = torch.zeros((self.vocab_size, self.vocab_size), dtype=torch.bool, device=self.device)
         self._save()
 
     def _load(self):
@@ -45,7 +46,7 @@ class PersistentBitmap:
         unpacked_bits = unpacked_bits[:needed_bits]
         
         # Convert to torch tensor and reshape
-        self.matrix = torch.from_numpy(unpacked_bits).bool().reshape(self.vocab_size, self.vocab_size).to("cuda")
+        self.matrix = torch.from_numpy(unpacked_bits).bool().reshape(self.vocab_size, self.vocab_size).to(self.device)
 
     def _save(self):
         # Convert to numpy for packing
@@ -90,6 +91,9 @@ class PersistentBitmap:
         Returns:
             2D tensor of shape (len(indices), vocab_size)
         """
+        # Move indices to the same device as the matrix if needed
+        if indices.device != self.matrix.device:
+            indices = indices.to(self.matrix.device)
         return self.matrix[indices]
     
     def get_col(self, y: int) -> torch.Tensor:
@@ -106,6 +110,9 @@ class PersistentBitmap:
         Returns:
             2D tensor of shape (vocab_size, len(indices))
         """
+        # Move indices to the same device as the matrix if needed
+        if indices.device != self.matrix.device:
+            indices = indices.to(self.matrix.device)
         return self.matrix[:, indices]
 
     def set_row(self, x: int, values):
@@ -121,6 +128,10 @@ class PersistentBitmap:
         if len(values) != self.vocab_size:
             raise ValueError(f"Values array must have length {self.vocab_size}")
         
+        # Move values to the same device as the matrix if needed
+        if values.device != self.matrix.device:
+            values = values.to(self.matrix.device)
+        
         self.matrix[x] = values.bool()
     
     def transpose(self):
@@ -130,4 +141,5 @@ class PersistentBitmap:
     def to(self, device):
         """Move the matrix to a specific device (CPU/GPU)."""
         self.matrix = self.matrix.to(device)
+        self.device = device
         return self

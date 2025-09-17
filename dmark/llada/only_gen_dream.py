@@ -35,6 +35,7 @@ class ExprConfig(BaseModel):
     num_samples: int
     output_dir: Optional[str]
     minimum_output_token: Optional[int]
+    bitmap_device: str = "cuda"
 
 def parse_args(): 
     parser = argparse.ArgumentParser()
@@ -69,6 +70,7 @@ def parse_args():
     # even though many of them have default values, the watermark will only be enabled if the strategy is not None
     parser.add_argument("--strategy", type=str, default=None, choices=["normal", "predict", "bidirectional"])
     parser.add_argument("--bitmap", type=str, default="bitmap.bin")
+    parser.add_argument("--bitmap_device", type=str, default="cuda", choices=["cpu", "cuda"], help="Device to store the bitmap on")
     parser.add_argument("--vocab_size", type=int, default=152064)
     parser.add_argument("--ratio", type=float, default=0.5)
     parser.add_argument("--delta", type=float, default=2.0)
@@ -107,6 +109,7 @@ def parse_args():
         num_samples=args.num_samples,
         output_dir=args.output_dir,
         minimum_output_token=args.minimum_output_token,
+        bitmap_device=args.bitmap_device,
     )
 
     return gen_config, watermark_config, expr_config
@@ -218,7 +221,7 @@ def run_generation(
 
     # Set up watermarking if config is provided
     if watermark_config.strategy is not None:
-        bitmap = PersistentBitmap(watermark_config.vocab_size, watermark_config.bitmap_path)
+        bitmap = PersistentBitmap(watermark_config.vocab_size, watermark_config.bitmap_path, device=expr_config.bitmap_device)
         watermark = Watermark(watermark_config, bitmap)
         # Import the custom diffusion_generate that supports watermark
         from dmark.llada.gen_dream import DreamGenerationMixin

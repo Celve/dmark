@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+from collections import Counter
 
 from pydantic import BaseModel
 from typing import Any, Optional
@@ -32,6 +33,7 @@ class ExprConfig(BaseModel):
     num_samples: int
     output_dir: Optional[str]
     minimum_output_token: Optional[int]
+    repeat_ratio: float = 0.2
     bitmap_device: str = "cuda"
 
 def parse_args(): 
@@ -49,6 +51,8 @@ def parse_args():
     # then we add number of samples and output directory
     parser.add_argument("--num_samples", type=int, default=100)
     parser.add_argument("--minimum_output_token", type=int, default=None)
+    parser.add_argument("--repeat_ratio", type=float, default=0.2, 
+                       help="Maximum ratio of any single token repetition (default: 0.2)")
     parser.add_argument("--output_dir", type=str, default=None)
 
     # then we add generation arguments
@@ -98,6 +102,7 @@ def parse_args():
         num_samples=args.num_samples,
         output_dir=args.output_dir,
         minimum_output_token=args.minimum_output_token,
+        repeat_ratio=args.repeat_ratio,
         bitmap_device=args.bitmap_device,
     )
 
@@ -434,25 +439,37 @@ def run_generation(
             
             # Check if output meets minimum token requirement
             num_output_tokens = output_ids.shape[0]
-            if expr_config.minimum_output_token is None or num_output_tokens >= expr_config.minimum_output_token:
-                results.append(
+            if expr_config.minimum_output_token and num_output_tokens < expr_config.minimum_output_token:
+                pbar.set_postfix({"skipped": f"min_tokens: {num_output_tokens} < {expr_config.minimum_output_token}"})
+                continue
+            
+            # Check for excessive token repetition
+            token_counts = Counter(output_ids.tolist())
+            if token_counts:
+                max_count = max(token_counts.values())
+                max_ratio = max_count / num_output_tokens if num_output_tokens > 0 else 0
+                if max_ratio > expr_config.repeat_ratio:
+                    most_repeated_token = max(token_counts, key=token_counts.get)
+                    pbar.set_postfix({"skipped": f"repetition: token {most_repeated_token} appears {max_count}/{num_output_tokens} ({max_ratio:.1%})"})
+                    continue
+            
+            # All checks passed, add to results
+            results.append(
+                {
+                    "data": 
                     {
-                        "data": 
-                        {
-                            "prompt": prompt,
-                            "ground_truth": gt,
-                            "output": output,
-                            "output_ids": output_ids.tolist(),
-                            "num_output_tokens": num_output_tokens,
-                        },
-                        "generation_metadata": gen_config.model_dump(),
-                        "watermark_metadata": watermark_config.model_dump() if watermark_config.strategy is not None else None,
-                        "expr_metadata": expr_config.model_dump(),
-                    }
-                )
-                pbar.update(1)
-            else:
-                pbar.set_postfix({"skipped": f"{num_output_tokens} < {expr_config.minimum_output_token}"})
+                        "prompt": prompt,
+                        "ground_truth": gt,
+                        "output": output,
+                        "output_ids": output_ids.tolist(),
+                        "num_output_tokens": num_output_tokens,
+                    },
+                    "generation_metadata": gen_config.model_dump(),
+                    "watermark_metadata": watermark_config.model_dump() if watermark_config.strategy is not None else None,
+                    "expr_metadata": expr_config.model_dump(),
+                }
+            )
+            pbar.update(1)
             
             dataset_idx += 1
     

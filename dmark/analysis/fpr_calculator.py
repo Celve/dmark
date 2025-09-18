@@ -2,10 +2,11 @@ import argparse
 import csv
 import json
 import os
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import numpy as np
 from tqdm import tqdm
 from datetime import datetime
+from collections import Counter
 
 
 def calculate_thresholds_for_fpr(z_scores: List[float], target_fprs: List[float] = [0.001, 0.01, 0.05, 0.10]) -> Dict[float, float]:
@@ -78,7 +79,32 @@ def extract_generation_config(results: List[Dict]) -> Dict[str, Optional[str]]:
     return config
 
 
-def process_single_file(file_path: str, target_fprs: List[float] = [0.001, 0.01, 0.05, 0.10], z_score_type: str = 'auto') -> Dict:
+def check_repetition(output_ids: List[int], repeat_ratio: float) -> Tuple[bool, Optional[int], Optional[float]]:
+    """Check if any token repeats excessively in output_ids.
+    
+    Args:
+        output_ids: List of token IDs
+        repeat_ratio: Maximum allowed repetition ratio (1.0 = no limit)
+    
+    Returns:
+        Tuple of (passes_check, most_repeated_token, max_ratio)
+    """
+    if not output_ids or repeat_ratio >= 1.0:
+        return True, None, None
+    
+    token_counts = Counter(output_ids)
+    max_count = max(token_counts.values())
+    num_tokens = len(output_ids)
+    max_ratio = max_count / num_tokens if num_tokens > 0 else 0
+    
+    if max_ratio > repeat_ratio:
+        most_repeated = max(token_counts, key=token_counts.get)
+        return False, most_repeated, max_ratio
+    
+    return True, None, max_ratio
+
+
+def process_single_file(file_path: str, target_fprs: List[float] = [0.001, 0.01, 0.05, 0.10], z_score_type: str = 'auto', repeat_ratio: float = 1.0) -> Dict:
     """
     Process a single JSON file to calculate z-score thresholds for FPR.
     
@@ -86,6 +112,7 @@ def process_single_file(file_path: str, target_fprs: List[float] = [0.001, 0.01,
         file_path: Path to JSON file with z-scores from non-watermarked samples
         target_fprs: List of target false positive rates
         z_score_type: Which z-score type to use ('original', 'truncated', 'attacked', 'auto')
+        repeat_ratio: Maximum allowed token repetition ratio (1.0 = no limit)
     
     Returns:
         Dictionary with analysis results for this file
@@ -99,10 +126,19 @@ def process_single_file(file_path: str, target_fprs: List[float] = [0.001, 0.01,
     # Collect z-scores from non-watermarked samples only
     non_watermark_scores = []
     z_score_version = None
+    skipped_repetition = 0
     
     for result in results:
         # Check if this is a non-watermarked sample
         if result.get('watermark_metadata') is None:
+            # Check for excessive repetition in output_ids
+            output_ids = result.get('data', {}).get('output_ids', [])
+            if output_ids:
+                passes_check, repeated_token, max_ratio = check_repetition(output_ids, repeat_ratio)
+                if not passes_check:
+                    skipped_repetition += 1
+                    continue
+            
             # Try different locations for z_score based on type
             z_score = None
             if 'watermark' in result and result['watermark'] is not None:
@@ -165,6 +201,7 @@ def process_single_file(file_path: str, target_fprs: List[float] = [0.001, 0.01,
         'thresholds': threshold_results,
         'statistics': {
             'n_samples': len(non_watermark_scores),
+            'skipped_repetition': skipped_repetition,
             'mean': float(np.mean(non_watermark_scores)),
             'std': float(np.std(non_watermark_scores)),
             'min': float(np.min(non_watermark_scores)),
@@ -182,7 +219,7 @@ def process_single_file(file_path: str, target_fprs: List[float] = [0.001, 0.01,
     }
 
 
-def generate_threshold_json(all_results: List[Dict], target_fprs: List[float], z_score_type: str) -> Dict:
+def generate_threshold_json(all_results: List[Dict], target_fprs: List[float], z_score_type: str, repeat_ratio: float) -> Dict:
     """
     Generate threshold JSON structure from results.
     
@@ -222,13 +259,14 @@ def generate_threshold_json(all_results: List[Dict], target_fprs: List[float], z
         'metadata': {
             'created_at': datetime.now().isoformat(),
             'z_score_type': z_score_type,
-            'target_fprs': target_fprs
+            'target_fprs': target_fprs,
+            'repeat_ratio': repeat_ratio
         },
         'configurations': configurations
     }
 
 
-def save_results(all_results: List[Dict], output_path: str, target_fprs: List[float], z_score_type: str) -> None:
+def save_results(all_results: List[Dict], output_path: str, target_fprs: List[float], z_score_type: str, repeat_ratio: float) -> None:
     """
     Save FPR threshold analysis results to JSON and CSV files.
     
@@ -239,7 +277,7 @@ def save_results(all_results: List[Dict], output_path: str, target_fprs: List[fl
         z_score_type: Which z-score type was used
     """
     # Generate and save threshold configuration JSON
-    threshold_config = generate_threshold_json(all_results, target_fprs, z_score_type)
+    threshold_config = generate_threshold_json(all_results, target_fprs, z_score_type, repeat_ratio)
     config_json_path = output_path + '_threshold_config.json'
     with open(config_json_path, 'w') as f:
         json.dump(threshold_config, f, indent=2)
@@ -338,6 +376,13 @@ def main():
         help="Which z-score type to analyze (default: auto - uses original if available, then truncated, then attacked)"
     )
     
+    parser.add_argument(
+        "--repeat-ratio",
+        type=float,
+        default=1.0,
+        help="Maximum allowed token repetition ratio, skip instances exceeding this (default: 1.0 = no filtering)"
+    )
+    
     args = parser.parse_args()
     
     # Check if input exists
@@ -395,7 +440,7 @@ def main():
     all_results = []
     
     for file_path in tqdm(valid_files, desc="Processing files"):
-        file_results = process_single_file(file_path, args.fpr, args.z_score_type)
+        file_results = process_single_file(file_path, args.fpr, args.z_score_type, args.repeat_ratio)
         
         if file_results:
             all_results.append(file_results)
@@ -405,6 +450,8 @@ def main():
             print(f"File: {os.path.basename(file_path)}")
             print(f"Z-score version: {file_results.get('z_score_version', 'unknown')}")
             print(f"Non-watermarked samples: {file_results['statistics']['n_samples']}")
+            if file_results['statistics']['skipped_repetition'] > 0:
+                print(f"Skipped due to repetition: {file_results['statistics']['skipped_repetition']}")
             print(f"Mean z-score: {file_results['statistics']['mean']:.4f}")
             print(f"Std z-score: {file_results['statistics']['std']:.4f}")
             print(f"{'='*70}")
@@ -424,7 +471,7 @@ def main():
         return
     
     # Save results
-    save_results(all_results, output_path, args.fpr, args.z_score_type)
+    save_results(all_results, output_path, args.fpr, args.z_score_type, args.repeat_ratio)
     
     # Print overall summary
     print("\n" + "="*70)
@@ -433,11 +480,15 @@ def main():
     
     # Aggregate statistics
     all_z_scores = []
+    total_skipped = 0
     for result in all_results:
         all_z_scores.extend(result['z_scores'])
+        total_skipped += result['statistics'].get('skipped_repetition', 0)
     
     if all_z_scores:
         print(f"\nTotal non-watermarked samples: {len(all_z_scores)}")
+        if total_skipped > 0:
+            print(f"Total skipped due to repetition: {total_skipped}")
         print(f"Overall mean z-score: {np.mean(all_z_scores):.4f}")
         print(f"Overall std: {np.std(all_z_scores):.4f}")
         print(f"Overall min: {np.min(all_z_scores):.4f}")

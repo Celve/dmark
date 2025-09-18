@@ -371,10 +371,10 @@ def main():
     )
     
     parser.add_argument(
-        "--output",
+        "--output-dir",
         type=str,
         default=None,
-        help="Output path prefix for results (without extension). Defaults to input directory + '/tpr_analysis'"
+        help="Output directory for results. Defaults to input directory"
     )
     
     parser.add_argument(
@@ -448,11 +448,16 @@ def main():
             print(f"Skipped {len(skipped_files)} files (non-watermarked or no matching config)")
         return
     
-    # Set output path
-    if args.output:
-        output_path = args.output
+    # Set output directory and filename
+    if args.output_dir:
+        output_dir = args.output_dir
+        os.makedirs(output_dir, exist_ok=True)
     else:
-        output_path = os.path.join(args.input_dir, 'tpr_analysis')
+        output_dir = args.input_dir
+    
+    # Generate output filename based on input directory name
+    input_dir_name = os.path.basename(os.path.normpath(args.input_dir))
+    output_path = os.path.join(output_dir, f"{input_dir_name}_tpr_analysis")
     
     # Save results
     save_results(all_results, output_path, fprs, args.threshold_config, args.z_score_type)

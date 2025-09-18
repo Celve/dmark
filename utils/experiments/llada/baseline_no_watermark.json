@@ -16,6 +16,6 @@
     },
     "variable_params": {
         "dataset": ["sentence-transformers/eli5", "allenai/c4", "openai/gsm8k"],
-        "remasking": ["low_confidence", "random", "right_to_left", "left_to_right"]
+        "remasking": ["low_confidence"]
     }
 }

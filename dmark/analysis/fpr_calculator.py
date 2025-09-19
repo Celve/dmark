@@ -9,7 +9,7 @@ from datetime import datetime
 from collections import Counter
 
 
-def calculate_thresholds_for_fpr(z_scores: List[float], target_fprs: List[float] = [0.001, 0.01, 0.05, 0.10]) -> Dict[float, float]:
+def calculate_thresholds_for_fpr(z_scores: List[float], target_fprs: List[float] = [0.001, 0.005, 0.01, 0.05]) -> Dict[float, float]:
     """
     Calculate z-score thresholds for target false positive rates.
     
@@ -104,7 +104,7 @@ def check_repetition(output_ids: List[int], repeat_ratio: float) -> Tuple[bool, 
     return True, None, max_ratio
 
 
-def process_single_file(file_path: str, target_fprs: List[float] = [0.001, 0.01, 0.05, 0.10], z_score_type: str = 'auto', repeat_ratio: float = 1.0) -> Dict:
+def process_single_file(file_path: str, target_fprs: List[float] = [0.001, 0.005, 0.01, 0.05], z_score_type: str = 'auto', repeat_ratio: float = 1.0) -> Dict:
     """
     Process a single JSON file to calculate z-score thresholds for FPR.
     
@@ -364,8 +364,8 @@ def main():
         "--fpr",
         type=float,
         nargs='+',
-        default=[0.001, 0.01, 0.05, 0.10],
-        help="Target false positive rates (default: 0.001 0.01 0.05 0.10)"
+        default=[0.001, 0.005, 0.01, 0.05],
+        help="Target false positive rates (default: 0.001 0.005 0.01 0.05)"
     )
     
     parser.add_argument(

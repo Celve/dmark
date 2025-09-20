@@ -200,13 +200,37 @@ def save_csv_results(all_results: List[Dict], input_dir: str, output_dir: str) -
     print(f"\nCSV saved to: {csv_path}")
 
 
-def process_ppl_files(input_dir: str, output_dir: Optional[str] = None) -> None:
+def load_existing_csv(csv_path: str) -> set:
+    """
+    Load existing CSV file and return set of processed files.
+    
+    Args:
+        csv_path: Path to CSV file
+    
+    Returns:
+        Set of processed file names
+    """
+    processed_files = set()
+    if os.path.exists(csv_path):
+        try:
+            with open(csv_path, 'r') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if 'file' in row:
+                        processed_files.add(row['file'])
+        except Exception as e:
+            print(f"Warning: Could not read existing CSV: {e}")
+    return processed_files
+
+
+def process_ppl_files(input_dir: str, output_dir: Optional[str] = None, delta_mode: bool = False) -> None:
     """
     Process JSON files to calculate average perplexity for each file.
     
     Args:
         input_dir: Directory containing JSON files with perplexity data
         output_dir: Directory to save output CSV file (defaults to input_dir)
+        delta_mode: If True, only process files not already in the output CSV
     """
     # Default output directory to input directory if not specified
     if output_dir is None:
@@ -251,9 +275,28 @@ def process_ppl_files(input_dir: str, output_dir: Optional[str] = None) -> None:
         return
     
     print(f"Found {len(valid_files)} files to process")
+    
+    # Check for existing CSV in delta mode
+    processed_files = set()
+    if delta_mode:
+        dir_name = os.path.basename(os.path.normpath(input_dir))
+        csv_path = os.path.join(output_dir, f'{dir_name}_ppl_analysis.csv')
+        processed_files = load_existing_csv(csv_path)
+        if processed_files:
+            print(f"Delta mode: Found {len(processed_files)} already processed files")
+            # Filter out already processed files
+            valid_files = [f for f in valid_files if f not in processed_files]
+            print(f"Remaining files to process: {len(valid_files)}")
+    
     json_files = valid_files
     
+    if not json_files:
+        print("No new files to process")
+        return
+    
     all_results = []
+    processed_count = 0
+    skipped_count = len(processed_files) if delta_mode else 0
     
     for json_file in tqdm(json_files, desc="Processing files"):
         file_path = os.path.join(input_dir, json_file)
@@ -261,6 +304,7 @@ def process_ppl_files(input_dir: str, output_dir: Optional[str] = None) -> None:
         
         if file_results:
             all_results.append(file_results)
+            processed_count += 1
             
             # Print results for this file
             print(f"\n{'='*70}")
@@ -278,8 +322,80 @@ def process_ppl_files(input_dir: str, output_dir: Optional[str] = None) -> None:
         print("You can use 'python -m dmark.eval.ppl' to add perplexity scores first.")
         return
     
-    # Save CSV results
-    save_csv_results(all_results, input_dir, output_dir)
+    # Save CSV results (append mode for delta)
+    if delta_mode and processed_files:
+        # Append to existing CSV
+        dir_name = os.path.basename(os.path.normpath(input_dir))
+        csv_path = os.path.join(output_dir, f'{dir_name}_ppl_analysis.csv')
+        
+        # Read existing data
+        existing_data = []
+        if os.path.exists(csv_path):
+            with open(csv_path, 'r') as f:
+                reader = csv.DictReader(f)
+                existing_data = list(reader)
+        
+        # Combine with new results
+        headers = [
+            'file', 'dataset', 'model', 'has_watermark', 'strategy', 'ratio', 'delta', 'key', 
+            'prebias', 'vocab_size', 'remasking', 'steps', 'gen_length', 'block_length', 
+            'temperature', 'cfg_scale', 'batch_size', 'total_samples',
+            'mean_ppl', 'std_ppl', 'min_ppl', 'max_ppl', 'median_ppl',
+            'p10_ppl', 'p25_ppl', 'p50_ppl', 'p75_ppl', 'p90_ppl'
+        ]
+        
+        # Write combined data
+        with open(csv_path, 'w', newline='') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=headers)
+            writer.writeheader()
+            
+            # Write existing data
+            for row in existing_data:
+                writer.writerow(row)
+            
+            # Write new data
+            for result in all_results:
+                meta = result['metadata']
+                stats = result['statistics']
+                percentiles = stats['percentiles']
+                
+                row = {
+                    'file': result['file'],
+                    'dataset': meta.get('dataset'),
+                    'model': meta.get('model'),
+                    'has_watermark': meta.get('has_watermark'),
+                    'strategy': meta.get('strategy'),
+                    'ratio': meta.get('ratio'),
+                    'delta': meta.get('delta'),
+                    'key': meta.get('key'),
+                    'prebias': meta.get('prebias'),
+                    'vocab_size': meta.get('vocab_size'),
+                    'remasking': meta.get('remasking'),
+                    'steps': meta.get('steps'),
+                    'gen_length': meta.get('gen_length'),
+                    'block_length': meta.get('block_length'),
+                    'temperature': meta.get('temperature'),
+                    'cfg_scale': meta.get('cfg_scale'),
+                    'batch_size': meta.get('batch_size'),
+                    'total_samples': stats['total_samples'],
+                    'mean_ppl': stats['mean'],
+                    'std_ppl': stats['std'],
+                    'min_ppl': stats['min'],
+                    'max_ppl': stats['max'],
+                    'median_ppl': stats['median'],
+                    'p10_ppl': percentiles['10%'],
+                    'p25_ppl': percentiles['25%'],
+                    'p50_ppl': percentiles['50%'],
+                    'p75_ppl': percentiles['75%'],
+                    'p90_ppl': percentiles['90%']
+                }
+                
+                writer.writerow(row)
+        
+        print(f"\nCSV updated: {csv_path}")
+    else:
+        # Normal save (overwrite)
+        save_csv_results(all_results, input_dir, output_dir)
     
     # Print overall summary
     print("\n" + "="*70)
@@ -290,12 +406,15 @@ def process_ppl_files(input_dir: str, output_dir: Optional[str] = None) -> None:
     all_means = [result['statistics']['mean'] for result in all_results]
     all_samples = sum(result['statistics']['total_samples'] for result in all_results)
     
-    print(f"\nTotal files processed: {len(all_results)}")
-    print(f"Total samples across all files: {all_samples}")
-    print(f"Average mean PPL across files: {np.mean(all_means):.2f}")
-    print(f"Std of mean PPL across files: {np.std(all_means):.2f}")
-    print(f"Min mean PPL: {np.min(all_means):.2f}")
-    print(f"Max mean PPL: {np.max(all_means):.2f}")
+    print(f"\nFiles processed in this run: {processed_count}")
+    if delta_mode and skipped_count > 0:
+        print(f"Files skipped (already processed): {skipped_count}")
+    print(f"Total samples across new files: {all_samples}")
+    if all_means:
+        print(f"Average mean PPL across new files: {np.mean(all_means):.2f}")
+        print(f"Std of mean PPL across new files: {np.std(all_means):.2f}")
+        print(f"Min mean PPL: {np.min(all_means):.2f}")
+        print(f"Max mean PPL: {np.max(all_means):.2f}")
 
 
 def main():
@@ -317,6 +436,12 @@ def main():
         help="Directory to save output CSV file (defaults to input directory)"
     )
     
+    parser.add_argument(
+        "--delta",
+        action="store_true",
+        help="Delta mode: only process files not already in the output CSV"
+    )
+    
     args = parser.parse_args()
     
     # Check if input directory exists
@@ -329,7 +454,7 @@ def main():
         return
     
     # Process files
-    process_ppl_files(args.input, args.output)
+    process_ppl_files(args.input, args.output, args.delta)
 
 
 if __name__ == "__main__":

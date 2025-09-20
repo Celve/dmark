@@ -50,6 +50,26 @@ def calculate_thresholds_for_fpr(z_scores: List[float], target_fprs: List[float]
     return thresholds
 
 
+def normalize_model_name(model_path: str) -> str:
+    """
+    Normalize model name to last two path components.
+    
+    Args:
+        model_path: Full or partial model path
+    
+    Returns:
+        Normalized model name (e.g., 'GSAI-ML/LLaDA-8B-Instruct')
+    """
+    if not model_path:
+        return model_path
+    
+    # Split by '/' and get last two parts
+    parts = model_path.split('/')
+    if len(parts) >= 2:
+        return '/'.join(parts[-2:])
+    return model_path
+
+
 def extract_generation_config(results: List[Dict]) -> Dict[str, Optional[str]]:
     """
     Extract generation configuration from results.
@@ -66,7 +86,9 @@ def extract_generation_config(results: List[Dict]) -> Dict[str, Optional[str]]:
     for result in results:
         if 'generation_metadata' in result:
             gen_meta = result['generation_metadata']
-            config['model'] = gen_meta.get('model')
+            # Normalize model name to last two path components
+            model = gen_meta.get('model')
+            config['model'] = normalize_model_name(model) if model else None
             config['dataset'] = gen_meta.get('dataset')
             config['steps'] = gen_meta.get('steps')
             config['gen_length'] = gen_meta.get('gen_length')

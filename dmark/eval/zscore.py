@@ -237,8 +237,12 @@ def process_json_file(
         manual_config: Manual watermark config to use if no metadata in JSON
     """
     # Load the JSON data
-    with open(input_file, 'r') as f:
-        results = json.load(f)
+    try:
+        with open(input_file, 'r') as f:
+            results = json.load(f)
+    except (IOError, OSError, json.JSONDecodeError) as e:
+        print(f"Skipping {input_file}: cannot read file ({e})")
+        return
     
     if not results:
         print(f"Skipping {input_file}: empty file")

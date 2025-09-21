@@ -301,7 +301,7 @@ def find_json_files(input_dir: str, tag: str) -> List[str]:
             and not f.startswith('_')]
 
 
-def process_directory(input_dir: str, output_dir: str, tag: str, bitmap_dir: str, bitmap_device: str, model: str, max_tokens: int, manual_config: dict = None, delta_mode: bool = False) -> None:
+def process_directory(input_dir: str, output_dir: str, tag: str, bitmap_dir: str, bitmap_device: str, model: str, max_tokens: int, manual_config: dict = None, increment_mode: bool = False) -> None:
     """Process all JSON files in a directory.
     
     Args:
@@ -313,7 +313,7 @@ def process_directory(input_dir: str, output_dir: str, tag: str, bitmap_dir: str
         model: Model name for tokenizer
         max_tokens: Maximum tokens to analyze
         manual_config: Manual watermark config to use if no metadata in JSON
-        delta_mode: If True, skip files that already have output
+        increment_mode: If True, skip files that already have output
     """
     # Find files to process
     json_files = find_json_files(input_dir, tag)
@@ -328,8 +328,8 @@ def process_directory(input_dir: str, output_dir: str, tag: str, bitmap_dir: str
     if manual_config:
         print(f"Manual watermark config provided: ratio={manual_config['ratio']}, delta={manual_config['delta']}, key={manual_config['key']}")
     
-    if delta_mode:
-        print("Delta mode enabled: skipping existing output files")
+    if increment_mode:
+        print("Increment mode enabled: skipping existing output files")
     
     # Process each file
     processed = 0
@@ -340,8 +340,8 @@ def process_directory(input_dir: str, output_dir: str, tag: str, bitmap_dir: str
         output_name = json_file.replace(".json", f"_{tag}.json")
         output_path = os.path.join(output_dir, output_name)
         
-        # Check if output exists in delta mode
-        if delta_mode and os.path.exists(output_path):
+        # Check if output exists in increment mode
+        if increment_mode and os.path.exists(output_path):
             skipped += 1
             print(f"\nSkipping (exists): {json_file}")
             continue
@@ -388,8 +388,8 @@ def main():
                        help="Watermark strategy (default: normal)")
     parser.add_argument("--use_manual_config", action="store_true",
                        help="Force use of manual config even if metadata exists in JSON")
-    parser.add_argument("--delta", action="store_true",
-                       help="Delta mode: only process files that don't have output yet")
+    parser.add_argument("--increment", action="store_true",
+                       help="Increment mode: only process files that don't have output yet")
     
     args = parser.parse_args()
     
@@ -430,7 +430,7 @@ def main():
         
         # Create output directory and process files
         os.makedirs(output_dir, exist_ok=True)
-        process_directory(args.input, output_dir, args.tag, args.bitmap_dir, args.bitmap_device, args.model, args.max_tokens, manual_config, args.delta)
+        process_directory(args.input, output_dir, args.tag, args.bitmap_dir, args.bitmap_device, args.model, args.max_tokens, manual_config, args.increment)
         
     elif os.path.isfile(args.input):
         # Determine output file path
@@ -441,8 +441,8 @@ def main():
         else:
             output_file = args.input.replace(".json", f"_{args.tag}.json")
         
-        # Check if output exists in delta mode
-        if args.delta and os.path.exists(output_file):
+        # Check if output exists in increment mode
+        if args.increment and os.path.exists(output_file):
             print(f"Skipping (output exists): {output_file}")
             return
         

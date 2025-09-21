@@ -223,14 +223,14 @@ def load_existing_csv(csv_path: str) -> set:
     return processed_files
 
 
-def process_ppl_files(input_dir: str, output_dir: Optional[str] = None, delta_mode: bool = False) -> None:
+def process_ppl_files(input_dir: str, output_dir: Optional[str] = None, increment_mode: bool = False) -> None:
     """
     Process JSON files to calculate average perplexity for each file.
     
     Args:
         input_dir: Directory containing JSON files with perplexity data
         output_dir: Directory to save output CSV file (defaults to input_dir)
-        delta_mode: If True, only process files not already in the output CSV
+        increment_mode: If True, only process files not already in the output CSV
     """
     # Default output directory to input directory if not specified
     if output_dir is None:
@@ -276,14 +276,14 @@ def process_ppl_files(input_dir: str, output_dir: Optional[str] = None, delta_mo
     
     print(f"Found {len(valid_files)} files to process")
     
-    # Check for existing CSV in delta mode
+    # Check for existing CSV in increment mode
     processed_files = set()
-    if delta_mode:
+    if increment_mode:
         dir_name = os.path.basename(os.path.normpath(input_dir))
         csv_path = os.path.join(output_dir, f'{dir_name}_ppl_analysis.csv')
         processed_files = load_existing_csv(csv_path)
         if processed_files:
-            print(f"Delta mode: Found {len(processed_files)} already processed files")
+            print(f"Increment mode: Found {len(processed_files)} already processed files")
             # Filter out already processed files
             valid_files = [f for f in valid_files if f not in processed_files]
             print(f"Remaining files to process: {len(valid_files)}")
@@ -296,7 +296,7 @@ def process_ppl_files(input_dir: str, output_dir: Optional[str] = None, delta_mo
     
     all_results = []
     processed_count = 0
-    skipped_count = len(processed_files) if delta_mode else 0
+    skipped_count = len(processed_files) if increment_mode else 0
     
     for json_file in tqdm(json_files, desc="Processing files"):
         file_path = os.path.join(input_dir, json_file)
@@ -322,8 +322,8 @@ def process_ppl_files(input_dir: str, output_dir: Optional[str] = None, delta_mo
         print("You can use 'python -m dmark.eval.ppl' to add perplexity scores first.")
         return
     
-    # Save CSV results (append mode for delta)
-    if delta_mode and processed_files:
+    # Save CSV results (append mode for increment)
+    if increment_mode and processed_files:
         # Append to existing CSV
         dir_name = os.path.basename(os.path.normpath(input_dir))
         csv_path = os.path.join(output_dir, f'{dir_name}_ppl_analysis.csv')
@@ -407,7 +407,7 @@ def process_ppl_files(input_dir: str, output_dir: Optional[str] = None, delta_mo
     all_samples = sum(result['statistics']['total_samples'] for result in all_results)
     
     print(f"\nFiles processed in this run: {processed_count}")
-    if delta_mode and skipped_count > 0:
+    if increment_mode and skipped_count > 0:
         print(f"Files skipped (already processed): {skipped_count}")
     print(f"Total samples across new files: {all_samples}")
     if all_means:
@@ -437,9 +437,9 @@ def main():
     )
     
     parser.add_argument(
-        "--delta",
+        "--increment",
         action="store_true",
-        help="Delta mode: only process files not already in the output CSV"
+        help="Increment mode: only process files not already in the output CSV"
     )
     
     args = parser.parse_args()
@@ -454,7 +454,7 @@ def main():
         return
     
     # Process files
-    process_ppl_files(args.input, args.output, args.delta)
+    process_ppl_files(args.input, args.output, args.increment)
 
 
 if __name__ == "__main__":

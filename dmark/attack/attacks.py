@@ -208,18 +208,17 @@ Paraphrased version:"""
         # Try to get paraphrase with retries
         for attempt in range(self.config.max_retries):
             try:
-                response = client.chat.completions.create(
-                    model=self.config.api_model,
-                    messages=[
+                response = client.responses.create(
+                    model="gpt-5",
+                    input=[
                         {"role": "system", "content": "You are a helpful assistant that paraphrases text while preserving meaning."},
-                        {"role": "user", "content": prompt}
+                        {"role": "user", "content": prompt},
                     ],
                     temperature=self.config.temperature,
-                    max_tokens=len(token_ids) * 2,  # Allow some expansion
-                    n=1
+                    max_output_tokens=1024,  # or another safe cap
                 )
 
-                paraphrased_text = response.choices[0].message.content.strip()
+                paraphrased_text = response.output_text
                 paraphrased_ids = self.tokenizer.encode(paraphrased_text, add_special_tokens=False)
 
                 # Calculate tokens affected (approximation for paraphrase)
@@ -596,14 +595,14 @@ def main():
     parser.add_argument(
         "--api-model",
         type=str,
-        default="gpt-3.5-turbo",
-        help="OpenAI model to use for paraphrase attack (default: gpt-3.5-turbo)"
+        default="gpt-5",
+        help="OpenAI model to use for paraphrase attack (default: gpt-5)"
     )
 
     parser.add_argument(
         "--temperature",
         type=float,
-        default=0.7,
+        default=1,
         help="Temperature for paraphrase generation (default: 0.7)"
     )
 

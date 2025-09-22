@@ -2,7 +2,10 @@
 """
 Collect all JSON files from multiple nested directories into a single output directory.
 Supports recursive collection from multiple input directories and merges them into one output.
-Handles duplicate filenames by prefixing with directory path information.
+
+Duplicate handling strategies:
+- rename: Add counter suffix to duplicate filenames (e.g., file_1.json, file_2.json)
+- skip: Skip files with duplicate names, keeping only the first occurrence
 """
 
 import argparse
@@ -75,8 +78,9 @@ def collect_json_files(
     move: bool = False,
     preserve_structure: bool = True,
     dry_run: bool = False,
-    exclude_dirs: List[str] = None
-) -> Tuple[int, int]:
+    exclude_dirs: List[str] = None,
+    duplicate_strategy: str = 'rename'
+) -> Tuple[int, int, int]:
     """
     Collect all JSON files from multiple input directory trees to output directory.
     
@@ -87,9 +91,10 @@ def collect_json_files(
         preserve_structure: If True, preserve directory structure in filename
         dry_run: If True, only show what would be done without doing it
         exclude_dirs: List of directory names to exclude
+        duplicate_strategy: How to handle duplicates - 'rename' (add counter) or 'skip'
     
     Returns:
-        Tuple of (files_processed, files_skipped)
+        Tuple of (files_processed, files_skipped_error, files_skipped_duplicate)
     """
     output_path = Path(output_dir).resolve()
     
@@ -98,8 +103,10 @@ def collect_json_files(
         output_path.mkdir(parents=True, exist_ok=True)
     
     total_processed = 0
-    total_skipped = 0
+    total_skipped_error = 0
+    total_skipped_duplicate = 0
     duplicates = {}
+    existing_files = set()  # Track all files in output directory
     
     # Process each input directory
     for input_dir in input_dirs:
@@ -126,7 +133,8 @@ def collect_json_files(
         
         # Process each file
         processed = 0
-        skipped = 0
+        skipped_error = 0
+        skipped_duplicate = 0
         
         for json_file in tqdm(json_files, desc=f"  Collecting from {input_path.name}"):
             # Generate output filename with input dir prefix to avoid conflicts
@@ -141,24 +149,39 @@ def collect_json_files(
             output_file = output_path / output_name
             
             # Handle duplicates
-            if output_file.exists() or output_name in duplicates:
-                # Add counter to filename
-                base, ext = output_name.rsplit('.', 1)
-                counter = duplicates.get(output_name, 1)
-                while True:
-                    new_name = f"{base}_{counter}.{ext}"
-                    new_output_file = output_path / new_name
-                    if not new_output_file.exists():
-                        output_file = new_output_file
-                        output_name = new_name
-                        break
-                    counter += 1
-                duplicates[output_name.rsplit('_', 1)[0] + '.' + ext] = counter + 1
+            if output_file.exists() or output_name in existing_files:
+                if duplicate_strategy == 'skip':
+                    # Skip duplicate files
+                    skipped_duplicate += 1
+                    if dry_run:
+                        tqdm.write(f"    Would skip duplicate: {json_file.name}")
+                    else:
+                        # Show message for significant duplicates in normal mode
+                        if skipped_duplicate <= 10 or skipped_duplicate % 100 == 0:
+                            tqdm.write(f"    Skipped duplicate: {json_file.name}")
+                    continue
+                else:  # duplicate_strategy == 'rename'
+                    # Add counter to filename
+                    base, ext = output_name.rsplit('.', 1)
+                    counter = duplicates.get(output_name, 1)
+                    while True:
+                        new_name = f"{base}_{counter}.{ext}"
+                        new_output_file = output_path / new_name
+                        if not new_output_file.exists() and new_name not in existing_files:
+                            output_file = new_output_file
+                            output_name = new_name
+                            if dry_run:
+                                tqdm.write(f"    Renaming duplicate: {json_file.name} -> {new_name}")
+                            break
+                        counter += 1
+                    duplicates[output_name.rsplit('_', 1)[0] + '.' + ext] = counter + 1
             
             # Copy or move file
             if dry_run:
                 action = "Would move" if move else "Would copy"
                 print(f"  {action}: {json_file.relative_to(input_path)} -> {output_name}")
+                # Track the file as "would be created" for duplicate detection
+                existing_files.add(output_name)
             else:
                 try:
                     if move:
@@ -166,17 +189,24 @@ def collect_json_files(
                     else:
                         shutil.copy2(str(json_file), str(output_file))
                     processed += 1
+                    existing_files.add(output_name)
                 except Exception as e:
                     print(f"  Error processing {json_file}: {e}")
-                    skipped += 1
+                    skipped_error += 1
         
         total_processed += processed
-        total_skipped += skipped
+        total_skipped_error += skipped_error
+        total_skipped_duplicate += skipped_duplicate
         
         if not dry_run:
-            print(f"  Processed: {processed} files, Skipped: {skipped} files")
+            summary_parts = [f"Processed: {processed} files"]
+            if skipped_error > 0:
+                summary_parts.append(f"Errors: {skipped_error}")
+            if skipped_duplicate > 0:
+                summary_parts.append(f"Duplicates: {skipped_duplicate}")
+            print(f"  {', '.join(summary_parts)}")
     
-    return total_processed, total_skipped
+    return total_processed, total_skipped_error, total_skipped_duplicate
 
 
 def main():
@@ -221,6 +251,13 @@ def main():
         help="Directory names to exclude from search"
     )
     
+    parser.add_argument(
+        "--duplicates",
+        choices=['rename', 'skip'],
+        default='rename',
+        help="How to handle duplicate filenames: 'rename' (add counter, default) or 'skip' (skip duplicate files)"
+    )
+    
     args = parser.parse_args()
     
     # Validate input directories
@@ -254,24 +291,28 @@ def main():
     print(f"To: {args.output_dir}")
     print(f"Action: {'Move' if args.move else 'Copy'}")
     print(f"Preserve structure: {not args.no_preserve_structure}")
+    print(f"Duplicate handling: {args.duplicates}")
     print(f"Dry run: {args.dry_run}")
     print(f"{'='*60}")
     
-    processed, skipped = collect_json_files(
+    processed, skipped_error, skipped_duplicate = collect_json_files(
         valid_input_dirs,
         args.output_dir,
         move=args.move,
         preserve_structure=not args.no_preserve_structure,
         dry_run=args.dry_run,
-        exclude_dirs=args.exclude
+        exclude_dirs=args.exclude,
+        duplicate_strategy=args.duplicates
     )
     
     # Print summary
     print(f"\n{'='*60}")
     print(f"Collection complete!")
     print(f"Total files {'moved' if args.move else 'copied'}: {processed}")
-    if skipped > 0:
-        print(f"Total files skipped (errors): {skipped}")
+    if skipped_error > 0:
+        print(f"Total files skipped (errors): {skipped_error}")
+    if skipped_duplicate > 0:
+        print(f"Total files skipped (duplicates): {skipped_duplicate}")
     print(f"Output directory: {args.output_dir}")
 
 

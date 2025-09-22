@@ -127,13 +127,17 @@ def process_single_result(
             result["watermark"][len_field] = gen_len
 
 
-def print_statistics(results: List[dict], output_file: str) -> None:
+def print_statistics(results: List[dict], output_file: str, verbose: bool = True) -> None:
     """Print z-score statistics for processed results.
     
     Args:
         results: List of processed result dictionaries
         output_file: Path where results were saved
+        verbose: Whether to print detailed statistics
     """
+    if not verbose:
+        return
+    
     print(f"Processed {len(results)} results")
     print(f"Results saved to: {output_file}")
     print("\n--- Z-score Statistics ---")
@@ -245,12 +249,20 @@ def process_json_file(
             results = json.load(f)
     except (IOError, OSError, json.JSONDecodeError) as e:
         if show_progress:
-            print(f"Skipping {input_file}: cannot read file ({e})")
+            file_basename = os.path.basename(input_file)
+            if file_num:
+                tqdm.write(f"  ❌ Error reading {file_basename}: {e}")
+            else:
+                print(f"❌ Skipping {input_file}: cannot read file ({e})")
         return {'status': 'error', 'message': str(e)}
     
     if not results:
         if show_progress:
-            print(f"Skipping {input_file}: empty file")
+            file_basename = os.path.basename(input_file)
+            if file_num:
+                tqdm.write(f"  ⏭️ Skip {file_basename}: Empty file")
+            else:
+                print(f"⏭️ Skipping {input_file}: empty file")
         return {'status': 'empty', 'message': 'Empty file'}
     
     # Try to get watermark config from JSON metadata or use manual config
@@ -260,16 +272,19 @@ def process_json_file(
         watermark_metadata = results[0]["watermark_metadata"]
         is_watermarked = True
         if show_progress and not file_num:
-            print(f"Using watermark metadata from JSON file")
+            print(f"✓ Using watermark metadata from JSON file")
     elif manual_config:
         watermark_metadata = manual_config
         if show_progress and not file_num:
-            print(f"Using manual watermark configuration for non-watermarked content")
+            print(f"✓ Using manual watermark configuration for non-watermarked content")
         # Note: We do NOT add watermark_metadata to results for non-watermarked content
         # It should remain None to indicate this is non-watermarked
     else:
-        if show_progress:
-            print(f"Skipping {input_file}: no watermark metadata found and no manual config provided")
+        if show_progress and file_num:
+            # In batch mode, show brief skip message
+            tqdm.write(f"  ⏭️ Skip {file_basename}: No watermark config")
+        elif show_progress:
+            print(f"⏭️ Skipping {input_file}: no watermark metadata found and no manual config provided")
         return {'status': 'no_config', 'message': 'No watermark config'}
     
     # Initialize components
@@ -277,7 +292,11 @@ def process_json_file(
         watermark = initialize_watermark(watermark_metadata, bitmap_dir, bitmap_device)
     except FileNotFoundError as e:
         if show_progress:
-            print(f"Error: {e}")
+            file_basename = os.path.basename(input_file)
+            if file_num:
+                tqdm.write(f"  ❌ Bitmap error for {file_basename}: {str(e).split(':')[0]}")
+            else:
+                print(f"❌ Error: {e}")
         return {'status': 'bitmap_error', 'message': str(e)}
     
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -285,7 +304,13 @@ def process_json_file(
     # Prepare progress bar description
     file_basename = os.path.basename(input_file)
     if file_num is not None and total_files is not None:
-        desc = f"[{file_num}/{total_files}] {file_basename[:30]}..."
+        # Truncate filename if too long but keep the extension visible
+        if len(file_basename) > 35:
+            name_part = file_basename[:25]
+            ext_part = file_basename[-7:]
+            desc = f"[{file_num}/{total_files}] {name_part}...{ext_part}"
+        else:
+            desc = f"[{file_num}/{total_files}] {file_basename}"
     else:
         desc = f"Processing {file_basename[:40]}..."
     
@@ -300,7 +325,9 @@ def process_json_file(
     
     # Process each result with progress tracking
     if show_progress:
-        pbar = tqdm(results, desc=desc, leave=False, position=1)
+        # Use position=1 for nested progress bar, leave=False to clean up after completion
+        pbar = tqdm(results, desc=desc, leave=False, position=1, 
+                   bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}] {postfix}')
     else:
         pbar = results
     
@@ -423,8 +450,8 @@ def process_directory(input_dir: str, output_dir: str, tag: str, bitmap_dir: str
     print(f"📁 Directory: {input_dir}")
     print(f"📊 Total JSON files found: {len(json_files)}")
     if increment_mode and files_skipped_existing:
-        print(f"⏭️  Skipping existing outputs: {len(files_skipped_existing)}")
-    print(f"🔄 Files to process: {len(files_to_process)}")
+        print(f"⏭️  Already processed (will skip): {len(files_skipped_existing)}")
+    print(f"🔄 New files to process: {len(files_to_process)}")
     print(f"💾 Output directory: {output_dir}")
     
     if manual_config:
@@ -433,7 +460,8 @@ def process_directory(input_dir: str, output_dir: str, tag: str, bitmap_dir: str
     print(f"{'='*60}\n")
     
     if not files_to_process:
-        print("No files to process (all outputs already exist)")
+        print(f"\n✅ All {len(json_files)} files have already been processed.")
+        print("No new files to process.")
         return
     
     # Process each file with overall progress bar
@@ -441,19 +469,36 @@ def process_directory(input_dir: str, output_dir: str, tag: str, bitmap_dir: str
     failed = 0
     watermarked_files = 0
     non_watermarked_files = 0
+    skip_reasons = {
+        'error': 0,        # File read errors
+        'empty': 0,        # Empty files
+        'no_config': 0,    # Missing watermark config
+        'bitmap_error': 0, # Bitmap not found
+        'existing': len(files_skipped_existing)  # Already processed
+    }
     all_z_scores = []
     all_detection_rates = []
     
-    # Main progress bar for overall progress
-    main_pbar = tqdm(files_to_process, desc="Overall Progress", position=0)
+    # Calculate total files including already skipped ones for accurate progress
+    total_files = len(json_files)
     
-    for idx, json_file in enumerate(main_pbar, 1):
+    # Main progress bar for overall progress - show all files including skipped
+    main_pbar = tqdm(total=total_files, desc="Overall Progress", position=0)
+    
+    # Update initial position for already skipped files
+    if files_skipped_existing:
+        main_pbar.update(len(files_skipped_existing))
+        main_pbar.set_postfix({'⏭️': len(files_skipped_existing), '✅': 0, '❌': 0})
+    
+    # Process files that need processing
+    for idx, json_file in enumerate(files_to_process, 1):
         input_path = os.path.join(input_dir, json_file)
         output_name = json_file.replace(".json", f"_{tag}.json")
         output_path = os.path.join(output_dir, output_name)
         
-        # Update main progress bar
-        main_pbar.set_description(f"Overall [{idx}/{len(files_to_process)}]")
+        # Update main progress bar description with current file
+        file_display = json_file[:30] + "..." if len(json_file) > 33 else json_file
+        main_pbar.set_description(f"Processing: {file_display}")
         
         # Process file with nested progress
         result = process_json_file(
@@ -461,7 +506,7 @@ def process_directory(input_dir: str, output_dir: str, tag: str, bitmap_dir: str
             show_progress=True, file_num=idx, total_files=len(files_to_process)
         )
         
-        # Track statistics
+        # Track statistics based on result
         if result['status'] == 'success':
             processed += 1
             if result['is_watermarked']:
@@ -473,27 +518,41 @@ def process_directory(input_dir: str, output_dir: str, tag: str, bitmap_dir: str
                 all_z_scores.append(result['avg_zscore'])
             if result['avg_detection_rate'] > 0:
                 all_detection_rates.append(result['avg_detection_rate'])
-            
-            # Update main progress bar postfix
-            postfix = {
-                '✅': processed,
-                '❌': failed,
-                'WM': watermarked_files,
-                'Non-WM': non_watermarked_files
-            }
-            if all_z_scores:
-                postfix['z̄'] = f"{sum(all_z_scores)/len(all_z_scores):.2f}"
-            main_pbar.set_postfix(postfix)
         else:
             failed += 1
-            # Update postfix with failure
-            postfix = {
-                '✅': processed,
-                '❌': failed,
-                'WM': watermarked_files,
-                'Non-WM': non_watermarked_files
-            }
-            main_pbar.set_postfix(postfix)
+            # Track specific failure reason
+            if result['status'] in skip_reasons:
+                skip_reasons[result['status']] += 1
+        
+        # Update progress bar
+        main_pbar.update(1)
+        
+        # Build comprehensive postfix
+        postfix = {
+            '✅': processed,
+            '❌': failed,
+        }
+        
+        # Add skip counts if any
+        total_skipped = sum(skip_reasons.values())
+        if total_skipped > 0:
+            postfix['⏭️'] = total_skipped
+        
+        # Add file type counts if any
+        if watermarked_files > 0:
+            postfix['WM'] = watermarked_files
+        if non_watermarked_files > 0:
+            postfix['Non-WM'] = non_watermarked_files
+        
+        # Add average z-score if available
+        if all_z_scores:
+            postfix['z̄'] = f"{sum(all_z_scores)/len(all_z_scores):.2f}"
+        
+        main_pbar.set_postfix(postfix)
+    
+    # Complete the progress bar
+    main_pbar.set_description("Processing Complete")
+    main_pbar.close()
     
     # Print final summary with statistics
     print(f"\n{'='*60}")
@@ -502,12 +561,23 @@ def process_directory(input_dir: str, output_dir: str, tag: str, bitmap_dir: str
     print(f"✅ Successfully processed: {processed} files")
     if failed > 0:
         print(f"❌ Failed: {failed} files")
-    if len(files_skipped_existing) > 0:
-        print(f"⏭️  Skipped (existing): {len(files_skipped_existing)} files")
+        # Show breakdown of failure reasons
+        if skip_reasons['error'] > 0:
+            print(f"   • Read errors: {skip_reasons['error']}")
+        if skip_reasons['empty'] > 0:
+            print(f"   • Empty files: {skip_reasons['empty']}")
+        if skip_reasons['no_config'] > 0:
+            print(f"   • No watermark config: {skip_reasons['no_config']}")
+        if skip_reasons['bitmap_error'] > 0:
+            print(f"   • Bitmap not found: {skip_reasons['bitmap_error']}")
+    if skip_reasons['existing'] > 0:
+        print(f"⏭️  Skipped (already processed): {skip_reasons['existing']} files")
     
-    print(f"\n📈 File Types:")
-    print(f"   • Watermarked: {watermarked_files}")
-    print(f"   • Non-watermarked: {non_watermarked_files}")
+    # Show file types only if we processed any files
+    if processed > 0:
+        print(f"\n📈 File Types:")
+        print(f"   • Watermarked: {watermarked_files}")
+        print(f"   • Non-watermarked: {non_watermarked_files}")
     
     if all_z_scores:
         print(f"\n📊 Z-Score Statistics:")

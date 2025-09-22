@@ -141,7 +141,7 @@ def get_z_scores_from_results(results: List[Dict], z_score_type: str = 'auto', r
             # Check for excessive repetition in output_ids
             output_ids = result.get('data', {}).get('output_ids', [])
             if output_ids:
-                passes_check, repeated_token, max_ratio = check_repetition(output_ids, repeat_ratio)
+                passes_check, _, _ = check_repetition(output_ids, repeat_ratio)
                 if not passes_check:
                     skipped_repetition += 1
                     continue
@@ -247,6 +247,7 @@ def process_single_file(
         return None
     
     # Find matching threshold configuration
+    # Include watermark ratio for accurate matching
     matching_configs = threshold_loader.find_configurations(
         model=gen_config.get('model'),
         dataset=gen_config.get('dataset'),
@@ -255,11 +256,14 @@ def process_single_file(
         block_length=gen_config.get('block_length'),
         temperature=gen_config.get('temperature'),
         cfg_scale=gen_config.get('cfg_scale'),
-        remasking=gen_config.get('remasking')
+        remasking=gen_config.get('remasking'),
+        watermark_ratio=wm_config.get('ratio')
     )
     
     if not matching_configs:
         print(f"Warning: No matching threshold configuration found for {os.path.basename(file_path)}")
+        print(f"  Generation config: {gen_config}")
+        print(f"  Watermark ratio: {wm_config.get('ratio')}")
         return None
     
     # Use first matching configuration
@@ -488,6 +492,7 @@ def main():
         return
     
     print(f"Available FPRs in configuration: {fprs}")
+    print(f"Available watermark ratios: {threshold_loader.get_available_watermark_ratios()}")
     
     # Find JSON files in input directory
     import glob
@@ -516,6 +521,8 @@ def main():
         print("No valid watermarked files found to process")
         if skipped_files:
             print(f"Skipped {len(skipped_files)} files (non-watermarked or no matching config)")
+            print("\nNote: Make sure the threshold configuration contains thresholds for the same watermark ratio")
+            print("      used in the watermarked files you're trying to analyze.")
         return
     
     # Set output directory and filename

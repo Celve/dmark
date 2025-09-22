@@ -18,6 +18,13 @@ class ThresholdLoader:
         self.version = self.data.get('version')
         self.metadata = self.data.get('metadata', {})
         self.configurations = self.data.get('configurations', [])
+        
+        # Store watermark ratios from configurations for easy access
+        self.watermark_ratios = set()
+        for config_entry in self.configurations:
+            ratio = config_entry.get('watermark_ratio')
+            if ratio is not None:
+                self.watermark_ratios.add(ratio)
     
     def get_threshold(
         self,
@@ -29,7 +36,8 @@ class ThresholdLoader:
         block_length: int = None,
         temperature: float = None,
         cfg_scale: float = None,
-        remasking: str = None
+        remasking: str = None,
+        watermark_ratio: float = None
     ) -> Optional[float]:
         """
         Get threshold for a specific FPR and configuration.
@@ -44,6 +52,7 @@ class ThresholdLoader:
             temperature: Temperature value
             cfg_scale: CFG scale value
             remasking: Remasking strategy
+            watermark_ratio: Watermark ratio (green list ratio)
         
         Returns:
             Threshold value or None if not found
@@ -73,6 +82,12 @@ class ThresholdLoader:
             if remasking and config.get('remasking') != remasking:
                 continue
             
+            # Check watermark ratio if specified
+            if watermark_ratio is not None:
+                entry_ratio = config_entry.get('watermark_ratio')
+                if entry_ratio is not None and abs(entry_ratio - watermark_ratio) > 0.001:
+                    continue
+            
             # Found matching configuration
             return config_entry['thresholds'].get(fpr_key)
         
@@ -87,7 +102,8 @@ class ThresholdLoader:
         block_length: int = None,
         temperature: float = None,
         cfg_scale: float = None,
-        remasking: str = None
+        remasking: str = None,
+        watermark_ratio: float = None
     ) -> List[Dict]:
         """
         Find all configurations matching the specified criteria.
@@ -118,6 +134,12 @@ class ThresholdLoader:
             if remasking and config.get('remasking') != remasking:
                 continue
             
+            # Check watermark ratio if specified
+            if watermark_ratio is not None:
+                entry_ratio = config_entry.get('watermark_ratio')
+                if entry_ratio is not None and abs(entry_ratio - watermark_ratio) > 0.001:
+                    continue
+            
             matches.append(config_entry)
         
         return matches
@@ -141,7 +163,8 @@ class ThresholdLoader:
         block_length: int = None,
         temperature: float = None,
         cfg_scale: float = None,
-        remasking: str = None
+        remasking: str = None,
+        watermark_ratio: float = None
     ) -> Optional[Dict]:
         """
         Get statistics for a specific configuration.
@@ -157,12 +180,17 @@ class ThresholdLoader:
             block_length=block_length,
             temperature=temperature,
             cfg_scale=cfg_scale,
-            remasking=remasking
+            remasking=remasking,
+            watermark_ratio=watermark_ratio
         )
         
         if configs:
             return configs[0].get('statistics')
         return None
+    
+    def get_available_watermark_ratios(self) -> List[float]:
+        """Get list of unique watermark ratios in the configuration."""
+        return sorted(list(self.watermark_ratios))
 
 
 def load_thresholds(config_path: str) -> ThresholdLoader:
@@ -192,6 +220,7 @@ if __name__ == "__main__":
     parser.add_argument("--temperature", type=float, help="Temperature")
     parser.add_argument("--cfg_scale", type=float, help="CFG scale")
     parser.add_argument("--remasking", help="Remasking strategy")
+    parser.add_argument("--watermark_ratio", type=float, help="Watermark ratio (green list ratio)")
     
     args = parser.parse_args()
     
@@ -208,7 +237,8 @@ if __name__ == "__main__":
         block_length=args.block_length,
         temperature=args.temperature,
         cfg_scale=args.cfg_scale,
-        remasking=args.remasking
+        remasking=args.remasking,
+        watermark_ratio=args.watermark_ratio
     )
     
     if threshold is not None:
@@ -223,7 +253,8 @@ if __name__ == "__main__":
             block_length=args.block_length,
             temperature=args.temperature,
             cfg_scale=args.cfg_scale,
-            remasking=args.remasking
+            remasking=args.remasking,
+            watermark_ratio=args.watermark_ratio
         )
         
         if stats:
@@ -240,7 +271,8 @@ if __name__ == "__main__":
             block_length=args.block_length,
             temperature=args.temperature,
             cfg_scale=args.cfg_scale,
-            remasking=args.remasking
+            remasking=args.remasking,
+            watermark_ratio=args.watermark_ratio
         )
         
         if configs:
@@ -251,3 +283,4 @@ if __name__ == "__main__":
             print("\nNo matching configurations found")
         
         print(f"\nAvailable FPRs: {loader.get_available_fprs()}")
+        print(f"Available watermark ratios: {loader.get_available_watermark_ratios()}")

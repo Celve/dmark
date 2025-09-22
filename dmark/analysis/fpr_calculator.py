@@ -101,6 +101,26 @@ def extract_generation_config(results: List[Dict]) -> Dict[str, Optional[str]]:
     return config
 
 
+def extract_watermark_ratio(results: List[Dict]) -> Optional[float]:
+    """
+    Extract watermark ratio from non-watermarked samples that have z-score calculations.
+    
+    Args:
+        results: List of result dictionaries
+    
+    Returns:
+        Watermark ratio if found, None otherwise
+    """
+    for result in results:
+        # Only check non-watermarked samples with z-score calculations
+        if result.get('watermark_metadata') is None and 'watermark' in result:
+            wm_data = result['watermark']
+            # Check if ratio is stored in watermark data
+            if 'ratio' in wm_data:
+                return wm_data['ratio']
+    return None
+
+
 def check_repetition(output_ids: List[int], repeat_ratio: float) -> Tuple[bool, Optional[int], Optional[float]]:
     """Check if any token repeats excessively in output_ids.
     
@@ -144,6 +164,9 @@ def process_single_file(file_path: str, target_fprs: List[float] = [0.001, 0.005
     
     # Extract configuration from the results
     config = extract_generation_config(results)
+    
+    # Extract watermark ratio if available
+    wm_ratio = extract_watermark_ratio(results)
     
     # Collect z-scores from non-watermarked samples only
     non_watermark_scores = []
@@ -219,6 +242,7 @@ def process_single_file(file_path: str, target_fprs: List[float] = [0.001, 0.005
     return {
         'file': os.path.basename(file_path),
         'config': config,
+        'watermark_ratio': wm_ratio,
         'z_score_version': z_score_version,
         'thresholds': threshold_results,
         'statistics': {
@@ -264,6 +288,7 @@ def generate_threshold_json(all_results: List[Dict], target_fprs: List[float], z
         
         config_entry = {
             'config': result['config'],
+            'watermark_ratio': result.get('watermark_ratio'),
             'thresholds': threshold_dict,
             'statistics': {
                 'mean': round(result['statistics']['mean'], 4),
@@ -317,7 +342,7 @@ def save_results(all_results: List[Dict], output_path: str, target_fprs: List[fl
     # Prepare CSV headers
     headers = [
         'file', 'dataset', 'model', 'steps', 'gen_length', 'block_length', 
-        'temperature', 'cfg_scale', 'batch_size', 'z_score_version', 'mean_zscore', 'std_zscore', 
+        'temperature', 'cfg_scale', 'batch_size', 'watermark_ratio', 'z_score_version', 'mean_zscore', 'std_zscore', 
         'min_zscore', 'max_zscore', 'median_zscore', 'total_samples'
     ]
     
@@ -343,6 +368,7 @@ def save_results(all_results: List[Dict], output_path: str, target_fprs: List[fl
                 'temperature': config.get('temperature'),
                 'cfg_scale': config.get('cfg_scale'),
                 'batch_size': config.get('batch_size'),
+                'watermark_ratio': result.get('watermark_ratio'),
                 'z_score_version': result.get('z_score_version', 'unknown'),
                 'mean_zscore': result['statistics']['mean'],
                 'std_zscore': result['statistics']['std'],
@@ -471,6 +497,7 @@ def main():
             print(f"\n{'='*70}")
             print(f"File: {os.path.basename(file_path)}")
             print(f"Z-score version: {file_results.get('z_score_version', 'unknown')}")
+            print(f"Watermark ratio: {file_results.get('watermark_ratio', 'N/A')}")
             print(f"Non-watermarked samples: {file_results['statistics']['n_samples']}")
             if file_results['statistics']['skipped_repetition'] > 0:
                 print(f"Skipped due to repetition: {file_results['statistics']['skipped_repetition']}")

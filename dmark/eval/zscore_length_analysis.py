@@ -129,7 +129,7 @@ def analyze_length_ranges(
         }
 
     # Process each result
-    for result in tqdm(results, desc="Processing samples"):
+    for result in tqdm(results, desc="Analyzing samples", leave=False):
         # Get prompt IDs
         prompt_text = result["data"].get("prompt", "")
         prompt_ids = tokenizer.encode(prompt_text, add_special_tokens=False) if prompt_text else []
@@ -222,20 +222,21 @@ def initialize_watermark(watermark_metadata: dict, bitmap_dir: str, bitmap_devic
     return Watermark(config, bitmap)
 
 
-def process_json_files(
-    input_files: List[str],
+def process_single_file(
+    input_file: str,
     output_file: str,
     bitmap_dir: str = ".",
     bitmap_device: str = "cpu",
     model_name: str = "GSAI-ML/LLaDA-8B-Instruct",
     max_length: int = 200,
     min_length: int = 1,
-    manual_config: dict = None
-) -> None:
-    """Process JSON files and output length-based z-score analysis.
+    manual_config: dict = None,
+    show_progress: bool = True
+) -> Dict:
+    """Process a single JSON file and output length-based z-score analysis.
 
     Args:
-        input_files: List of input JSON file paths
+        input_file: Path to input JSON file
         output_file: Path to output JSON file
         bitmap_dir: Directory containing bitmap files
         bitmap_device: Device to store the bitmap on
@@ -243,71 +244,81 @@ def process_json_files(
         max_length: Maximum generation length to analyze
         min_length: Minimum generation length to analyze
         manual_config: Manual watermark config if not in JSON
+        show_progress: Whether to show progress bar
+
+    Returns:
+        Dictionary with processing status and statistics
     """
-    all_results = []
-    watermark = None
-    tokenizer = None
+    file_basename = os.path.basename(input_file)
 
-    # Load all JSON files
-    print(f"Loading {len(input_files)} JSON file(s)...")
-    for input_file in input_files:
-        try:
-            with open(input_file, 'r') as f:
-                results = json.load(f)
-                all_results.extend(results)
-                print(f"  ✓ Loaded {len(results)} samples from {os.path.basename(input_file)}")
-        except Exception as e:
-            print(f"  ✗ Error loading {input_file}: {e}")
-            continue
+    # Load the JSON data
+    try:
+        with open(input_file, 'r') as f:
+            results = json.load(f)
+    except Exception as e:
+        if show_progress:
+            print(f"❌ Error reading {file_basename}: {e}")
+        return {'status': 'error', 'message': str(e), 'file': file_basename}
 
-    if not all_results:
-        print("Error: No valid results loaded from input files")
-        return
-
-    print(f"Total samples loaded: {len(all_results)}")
+    if not results:
+        if show_progress:
+            print(f"⏭️  Skipping {file_basename}: Empty file")
+        return {'status': 'empty', 'message': 'Empty file', 'file': file_basename}
 
     # Get watermark configuration
     watermark_metadata = None
-    if all_results[0].get("watermark_metadata"):
-        watermark_metadata = all_results[0]["watermark_metadata"]
-        print("Using watermark metadata from JSON file")
+    is_watermarked = False
+
+    if results[0].get("watermark_metadata"):
+        watermark_metadata = results[0]["watermark_metadata"]
+        is_watermarked = True
     elif manual_config:
         watermark_metadata = manual_config
-        print("Using manual watermark configuration")
     else:
-        print("Error: No watermark configuration found")
-        return
+        if show_progress:
+            print(f"⏭️  Skipping {file_basename}: No watermark config")
+        return {'status': 'no_config', 'message': 'No watermark config', 'file': file_basename}
 
     # Initialize watermark and tokenizer
     try:
         watermark = initialize_watermark(watermark_metadata, bitmap_dir, bitmap_device)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
+    except FileNotFoundError as e:
+        if show_progress:
+            print(f"❌ Bitmap error for {file_basename}: {str(e).split(':')[0]}")
+        return {'status': 'bitmap_error', 'message': str(e), 'file': file_basename}
     except Exception as e:
-        print(f"Error initializing: {e}")
-        return
+        if show_progress:
+            print(f"❌ Initialization error for {file_basename}: {e}")
+        return {'status': 'init_error', 'message': str(e), 'file': file_basename}
 
     # Perform analysis
-    print(f"\nAnalyzing z-scores for generation lengths {min_length} to {max_length}...")
+    if show_progress:
+        print(f"📊 Analyzing {file_basename} ({len(results)} samples)...")
+
     length_stats = analyze_length_ranges(
-        all_results, watermark, tokenizer, max_length, min_length
+        results, watermark, tokenizer, max_length, min_length
     )
 
     # Prepare output data
     output_data = {
         'metadata': {
-            'num_samples': len(all_results),
+            'input_file': file_basename,
+            'num_samples': len(results),
             'min_length': min_length,
             'max_length': max_length,
             'watermark_config': watermark_metadata,
             'model': model_name,
-            'input_files': input_files
+            'is_watermarked': is_watermarked
         },
         'length_statistics': {}
     }
 
     # Convert length stats to serializable format
+    valid_lengths = []
     for length, stats in length_stats.items():
         if stats['sample_count'] > 0:
+            valid_lengths.append(length)
             output_data['length_statistics'][str(length)] = {
                 'sample_count': stats['sample_count'],
                 'avg_z_score': float(stats.get('avg_z_score', 0)),
@@ -322,12 +333,11 @@ def process_json_files(
             }
 
     # Add summary statistics
-    valid_lengths = [int(l) for l in output_data['length_statistics'].keys()]
     if valid_lengths:
         z_scores_by_length = [output_data['length_statistics'][str(l)]['avg_z_score']
                               for l in sorted(valid_lengths)]
         output_data['summary'] = {
-            'overall_avg_z_score': np.mean(z_scores_by_length),
+            'overall_avg_z_score': float(np.mean(z_scores_by_length)),
             'min_length_with_data': min(valid_lengths),
             'max_length_with_data': max(valid_lengths),
             'z_score_at_50': output_data['length_statistics'].get('50', {}).get('avg_z_score'),
@@ -340,21 +350,210 @@ def process_json_files(
     with open(output_file, 'w') as f:
         json.dump(output_data, f, indent=2)
 
-    print(f"\n✓ Analysis complete! Results saved to: {output_file}")
+    if show_progress:
+        print(f"✓ Saved analysis to: {os.path.basename(output_file)}")
+
+    # Return statistics
+    return {
+        'status': 'success',
+        'file': file_basename,
+        'is_watermarked': is_watermarked,
+        'num_samples': len(results),
+        'overall_avg_z_score': output_data.get('summary', {}).get('overall_avg_z_score', 0),
+        'output_file': output_file
+    }
+
+
+def find_json_files(input_dir: str, tag: str) -> List[str]:
+    """Find JSON files to process, excluding already tagged files."""
+    tag_suffix = f"_{tag}.json"
+    return [f for f in os.listdir(input_dir)
+            if f.endswith('.json')
+            and not f.endswith(tag_suffix)
+            and not f.startswith('_')]
+
+
+def process_directory(
+    input_dir: str,
+    output_dir: str,
+    tag: str,
+    bitmap_dir: str,
+    bitmap_device: str,
+    model_name: str,
+    max_length: int,
+    min_length: int,
+    manual_config: dict = None,
+    consolidate: bool = False
+) -> None:
+    """Process all JSON files in a directory.
+
+    Args:
+        input_dir: Input directory path
+        output_dir: Output directory path
+        tag: Tag to append to output files
+        bitmap_dir: Directory containing bitmap files
+        bitmap_device: Device to store the bitmap on
+        model_name: Model name for tokenizer
+        max_length: Maximum generation length to analyze
+        min_length: Minimum generation length to analyze
+        manual_config: Manual watermark config if not in JSON
+        consolidate: If True, also create a consolidated analysis file
+    """
+    # Find files to process
+    json_files = find_json_files(input_dir, tag)
+
+    if not json_files:
+        print(f"No JSON files found in directory: {input_dir}")
+        return
+
+    print(f"\n{'='*60}")
+    print(f"📁 Directory: {input_dir}")
+    print(f"📊 Total JSON files found: {len(json_files)}")
+    print(f"🔄 Files to process: {len(json_files)}")
+    print(f"💾 Output directory: {output_dir}")
+    print(f"📏 Length range: {min_length} to {max_length}")
+
+    if manual_config:
+        print(f"⚙️  Manual config: ratio={manual_config['ratio']}, key={manual_config['key']}")
+
+    print(f"{'='*60}\n")
+
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Process each file
+    processed = 0
+    failed = 0
+    watermarked_files = 0
+    non_watermarked_files = 0
+    all_z_scores_overall = []
+
+    # Main progress bar
+    main_pbar = tqdm(json_files, desc="Overall Progress")
+
+    for json_file in main_pbar:
+        input_path = os.path.join(input_dir, json_file)
+        output_name = json_file.replace(".json", f"_{tag}.json")
+        output_path = os.path.join(output_dir, output_name)
+
+        # Update progress bar description
+        file_display = json_file[:30] + "..." if len(json_file) > 33 else json_file
+        main_pbar.set_description(f"Processing: {file_display}")
+
+        # Process file
+        result = process_single_file(
+            input_path, output_path, bitmap_dir, bitmap_device,
+            model_name, max_length, min_length, manual_config,
+            show_progress=False
+        )
+
+        # Track statistics
+        if result['status'] == 'success':
+            processed += 1
+            if result['is_watermarked']:
+                watermarked_files += 1
+            else:
+                non_watermarked_files += 1
+
+            if result['overall_avg_z_score'] > 0:
+                all_z_scores_overall.append(result['overall_avg_z_score'])
+
+            tqdm.write(f"  ✓ {json_file} -> {output_name}")
+        else:
+            failed += 1
+            tqdm.write(f"  ❌ {json_file}: {result.get('message', 'Unknown error')}")
+
+        # Update progress bar postfix
+        postfix = {'✅': processed, '❌': failed}
+        if all_z_scores_overall:
+            postfix['z̄'] = f"{np.mean(all_z_scores_overall):.2f}"
+        main_pbar.set_postfix(postfix)
+
+    main_pbar.close()
 
     # Print summary
-    if valid_lengths:
-        print("\nKey Statistics:")
-        print(f"  • Samples analyzed: {len(all_results)}")
-        print(f"  • Generation lengths: {min(valid_lengths)} to {max(valid_lengths)}")
-        print(f"  • Overall average z-score: {output_data['summary']['overall_avg_z_score']:.4f}")
+    print(f"\n{'='*60}")
+    print(f"📊 PROCESSING COMPLETE")
+    print(f"{'='*60}")
+    print(f"✅ Successfully processed: {processed} files")
+    if failed > 0:
+        print(f"❌ Failed: {failed} files")
 
-        for checkpoint in [50, 100, 150, 200]:
-            if str(checkpoint) in output_data['length_statistics']:
-                stats = output_data['length_statistics'][str(checkpoint)]
-                print(f"  • At length {checkpoint}: z-score={stats['avg_z_score']:.4f}, "
-                      f"detection_rate={stats['avg_detection_rate']:.2%} "
-                      f"(n={stats['sample_count']})")
+    if processed > 0:
+        print(f"\n📈 File Types:")
+        print(f"   • Watermarked: {watermarked_files}")
+        print(f"   • Non-watermarked: {non_watermarked_files}")
+
+    if all_z_scores_overall:
+        print(f"\n📊 Overall Z-Score Statistics:")
+        print(f"   • Average: {np.mean(all_z_scores_overall):.4f}")
+        print(f"   • Min: {np.min(all_z_scores_overall):.4f}")
+        print(f"   • Max: {np.max(all_z_scores_overall):.4f}")
+
+    print(f"\n💾 Output directory: {output_dir}")
+    print(f"{'='*60}")
+
+    # Create consolidated analysis if requested
+    if consolidate and processed > 0:
+        print("\n📊 Creating consolidated analysis...")
+        create_consolidated_analysis(output_dir, tag)
+
+
+def create_consolidated_analysis(output_dir: str, tag: str) -> None:
+    """Create a consolidated analysis from all processed files."""
+    # Find all analysis files
+    analysis_files = [f for f in os.listdir(output_dir)
+                     if f.endswith(f"_{tag}.json")]
+
+    if not analysis_files:
+        print("No analysis files found for consolidation")
+        return
+
+    # Aggregate data
+    all_data = []
+    for file in analysis_files:
+        with open(os.path.join(output_dir, file), 'r') as f:
+            data = json.load(f)
+            all_data.append(data)
+
+    # Calculate consolidated statistics
+    consolidated = {
+        'metadata': {
+            'num_files': len(analysis_files),
+            'total_samples': sum(d['metadata']['num_samples'] for d in all_data),
+            'files': [d['metadata']['input_file'] for d in all_data]
+        },
+        'consolidated_statistics': {},
+        'summary': {
+            'avg_overall_z_score': np.mean([d.get('summary', {}).get('overall_avg_z_score', 0)
+                                           for d in all_data if d.get('summary')])
+        }
+    }
+
+    # Aggregate by length
+    length_data = {}
+    for data in all_data:
+        for length_str, stats in data.get('length_statistics', {}).items():
+            if length_str not in length_data:
+                length_data[length_str] = []
+            length_data[length_str].append(stats['avg_z_score'])
+
+    # Calculate consolidated stats for each length
+    for length_str, z_scores in length_data.items():
+        consolidated['consolidated_statistics'][length_str] = {
+            'num_files': len(z_scores),
+            'avg_z_score': float(np.mean(z_scores)),
+            'std_z_score': float(np.std(z_scores)),
+            'min_z_score': float(np.min(z_scores)),
+            'max_z_score': float(np.max(z_scores))
+        }
+
+    # Save consolidated analysis
+    consolidated_path = os.path.join(output_dir, f"_consolidated_{tag}.json")
+    with open(consolidated_path, 'w') as f:
+        json.dump(consolidated, f, indent=2)
+
+    print(f"✓ Consolidated analysis saved to: {os.path.basename(consolidated_path)}")
 
 
 def main():
@@ -364,16 +563,23 @@ def main():
 
     parser.add_argument(
         "--input",
-        nargs="+",
+        type=str,
         required=True,
-        help="Input JSON file(s) containing generation results"
+        help="Input JSON file(s) or directory containing JSON files"
     )
 
     parser.add_argument(
         "--output",
         type=str,
-        default="zscore_length_analysis.json",
-        help="Output JSON file for length-based z-score analysis (default: zscore_length_analysis.json)"
+        default=None,
+        help="Output JSON file or directory (default: auto-generated based on input)"
+    )
+
+    parser.add_argument(
+        "--tag",
+        type=str,
+        default="length_analysis",
+        help="Tag to append to output files when processing directory (default: length_analysis)"
     )
 
     parser.add_argument(
@@ -420,18 +626,17 @@ def main():
     parser.add_argument("--use_manual_config", action="store_true",
                        help="Force use of manual config even if metadata exists in JSON")
 
+    parser.add_argument(
+        "--consolidate",
+        action="store_true",
+        help="Create a consolidated analysis file when processing directories"
+    )
+
     args = parser.parse_args()
 
-    # Validate input files
-    valid_input_files = []
-    for input_file in args.input:
-        if os.path.exists(input_file) and os.path.isfile(input_file):
-            valid_input_files.append(input_file)
-        else:
-            print(f"Warning: Input file '{input_file}' not found or not a file")
-
-    if not valid_input_files:
-        print("Error: No valid input files found")
+    # Validate input
+    if not os.path.exists(args.input):
+        print(f"Error: Input path '{args.input}' not found")
         return
 
     # Build manual config if needed
@@ -450,17 +655,56 @@ def main():
         }
         print("Manual watermark configuration enabled")
 
-    # Process files
-    process_json_files(
-        valid_input_files,
-        args.output,
-        args.bitmap_dir,
-        args.bitmap_device,
-        args.model,
-        args.max_length,
-        args.min_length,
-        manual_config
-    )
+    # Process based on input type
+    if os.path.isdir(args.input):
+        # Directory processing
+        if args.output:
+            output_dir = args.output
+        else:
+            input_dirname = os.path.basename(os.path.normpath(args.input))
+            parent_dir = os.path.dirname(os.path.normpath(args.input))
+            output_dir = os.path.join(parent_dir, f"{input_dirname}_{args.tag}")
+
+        process_directory(
+            args.input, output_dir, args.tag, args.bitmap_dir,
+            args.bitmap_device, args.model, args.max_length,
+            args.min_length, manual_config, args.consolidate
+        )
+
+    elif os.path.isfile(args.input):
+        # Single file processing
+        if args.output:
+            output_file = args.output
+        else:
+            output_file = args.input.replace(".json", f"_{args.tag}.json")
+
+        print(f"\nProcessing: {os.path.basename(args.input)}")
+        result = process_single_file(
+            args.input, output_file, args.bitmap_dir, args.bitmap_device,
+            args.model, args.max_length, args.min_length, manual_config
+        )
+
+        if result['status'] == 'success':
+            print(f"\n✅ Analysis complete!")
+            print(f"📊 Samples analyzed: {result['num_samples']}")
+            print(f"📈 Overall average z-score: {result['overall_avg_z_score']:.4f}")
+            print(f"💾 Output saved to: {output_file}")
+
+            # Print key statistics
+            with open(output_file, 'r') as f:
+                data = json.load(f)
+
+            if 'summary' in data:
+                print(f"\n🔍 Key Statistics:")
+                for checkpoint in [50, 100, 150, 200]:
+                    if str(checkpoint) in data['length_statistics']:
+                        stats = data['length_statistics'][str(checkpoint)]
+                        print(f"  • At length {checkpoint}: z-score={stats['avg_z_score']:.4f}, "
+                              f"detection_rate={stats['avg_detection_rate']:.2%}")
+        else:
+            print(f"❌ Error: {result.get('message', 'Unknown error')}")
+    else:
+        print(f"Error: '{args.input}' is neither a file nor a directory")
 
 
 if __name__ == "__main__":

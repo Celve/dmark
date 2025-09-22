@@ -7,6 +7,7 @@ from tqdm import tqdm
 import numpy as np
 from transformers import AutoTokenizer
 from datetime import datetime
+import time
 
 
 def random_swap_attack(token_ids: List[int], ratio: float = 0.2, seed: int = None) -> List[int]:
@@ -115,36 +116,121 @@ def random_insert_attack(token_ids: List[int], vocab_size: int = 126464, ratio: 
 def synonym_attack(token_ids: List[int], tokenizer: Any, ratio: float = 0.2, seed: int = None) -> List[int]:
     """
     Replace tokens with random tokens (simple synonym attack).
-    
+
     Args:
         token_ids: List of token IDs to attack
         tokenizer: Tokenizer for vocabulary size
         ratio: Ratio of tokens to replace (default: 0.2 = 20%)
         seed: Random seed for reproducibility
-    
+
     Returns:
         List of token IDs after replacement
     """
     if seed is not None:
         random.seed(seed)
-    
+
     attacked_ids = token_ids.copy()
     n_tokens = len(attacked_ids)
     vocab_size = len(tokenizer)
     if n_tokens == 0:
         return attacked_ids
-    
+
     # Calculate number of tokens to replace
     n_replace = int(n_tokens * ratio)
-    
+
     # Randomly select positions to replace
     positions = random.sample(range(n_tokens), min(n_replace, n_tokens))
-    
+
     # Replace tokens at selected positions
     for pos in positions:
         attacked_ids[pos] = random.randint(0, vocab_size - 1)
-    
+
     return attacked_ids
+
+
+def paraphrase_attack(
+    token_ids: List[int],
+    tokenizer: Any,
+    api_key: str = None,
+    model: str = "gpt-3.5-turbo",
+    temperature: float = 0.7,
+    max_retries: int = 3
+) -> List[int]:
+    """
+    Paraphrase text using OpenAI API.
+
+    Args:
+        token_ids: List of token IDs to paraphrase
+        tokenizer: Tokenizer for text conversion
+        api_key: OpenAI API key (if None, uses environment variable)
+        model: OpenAI model to use
+        temperature: Temperature for generation (higher = more creative)
+        max_retries: Maximum number of retry attempts on API failure
+
+    Returns:
+        List of token IDs after paraphrasing
+    """
+    try:
+        import openai
+    except ImportError:
+        raise ImportError("openai package not installed. Install with: pip install openai")
+
+    # Get API key from environment if not provided
+    if api_key is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OpenAI API key not provided. Set OPENAI_API_KEY environment variable or pass api_key parameter.")
+
+    # Initialize OpenAI client
+    from openai import OpenAI
+    client = OpenAI(api_key=api_key)
+
+    # Decode tokens to text
+    original_text = tokenizer.decode(token_ids, skip_special_tokens=True)
+
+    if not original_text.strip():
+        return token_ids
+
+    # Create paraphrasing prompt
+    prompt = f"""Please paraphrase the following text while preserving its meaning.
+Make the paraphrase natural and fluent but different from the original:
+
+Text: {original_text}
+
+Paraphrased version:"""
+
+    # Try to get paraphrase with retries
+    for attempt in range(max_retries):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "You are a helpful assistant that paraphrases text while preserving meaning."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=temperature,
+                max_tokens=len(token_ids) * 2,  # Allow some expansion
+                n=1
+            )
+
+            paraphrased_text = response.choices[0].message.content.strip()
+
+            # Encode paraphrased text back to tokens
+            paraphrased_ids = tokenizer.encode(paraphrased_text, add_special_tokens=False)
+
+            return paraphrased_ids
+
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait_time = (2 ** attempt) + random.uniform(0, 1)
+                print(f"  API error (attempt {attempt + 1}/{max_retries}): {e}. Retrying in {wait_time:.1f}s...")
+                time.sleep(wait_time)
+            else:
+                print(f"  Failed to paraphrase after {max_retries} attempts: {e}")
+                # Return original tokens on failure
+                return token_ids
+
+    return token_ids
 
 
 def apply_attack(
@@ -152,23 +238,29 @@ def apply_attack(
     attack_type: str,
     ratio: float,
     seed: int = None,
-    tokenizer: Any = None
+    tokenizer: Any = None,
+    api_key: str = None,
+    api_model: str = "gpt-3.5-turbo",
+    temperature: float = 0.7
 ) -> Tuple[List[int], Dict[str, Any]]:
     """
     Apply the specified attack to token IDs.
-    
+
     Args:
         token_ids: List of token IDs to attack
         attack_type: Type of attack to apply
         ratio: Attack ratio
         seed: Random seed
         tokenizer: Tokenizer (needed for some attacks)
-    
+        api_key: OpenAI API key (for paraphrase attack)
+        api_model: OpenAI model to use (for paraphrase attack)
+        temperature: Temperature for paraphrase generation
+
     Returns:
         Tuple of (attacked token IDs, attack metadata)
     """
     original_length = len(token_ids)
-    
+
     if attack_type == 'swap':
         attacked_ids = random_swap_attack(token_ids, ratio=ratio, seed=seed)
         tokens_affected = int(original_length * ratio)
@@ -183,18 +275,35 @@ def apply_attack(
     elif attack_type == 'synonym':
         attacked_ids = synonym_attack(token_ids, tokenizer=tokenizer, ratio=ratio, seed=seed)
         tokens_affected = int(original_length * ratio)
+    elif attack_type == 'paraphrase':
+        if tokenizer is None:
+            raise ValueError("Tokenizer is required for paraphrase attack")
+        attacked_ids = paraphrase_attack(
+            token_ids,
+            tokenizer=tokenizer,
+            api_key=api_key,
+            model=api_model,
+            temperature=temperature
+        )
+        # For paraphrase, all tokens are potentially affected
+        tokens_affected = abs(len(attacked_ids) - original_length) + min(len(attacked_ids), original_length)
     else:
         raise ValueError(f"Unknown attack type: {attack_type}")
-    
+
     metadata = {
         'type': attack_type,
-        'ratio': ratio,
+        'ratio': ratio if attack_type != 'paraphrase' else None,
         'original_length': original_length,
         'attacked_length': len(attacked_ids),
         'tokens_affected': tokens_affected,
         'seed': seed
     }
-    
+
+    # Add paraphrase-specific metadata
+    if attack_type == 'paraphrase':
+        metadata['api_model'] = api_model
+        metadata['temperature'] = temperature
+
     return attacked_ids, metadata
 
 
@@ -206,7 +315,10 @@ def process_json_file(
     seed: int = None,
     model_name: str = "GSAI-ML/LLaDA-8B-Instruct",
     tokenizer: Optional[Any] = None,
-    min_output_length: int = 200
+    min_output_length: int = 200,
+    api_key: str = None,
+    api_model: str = "gpt-3.5-turbo",
+    temperature: float = 0.7
 ) -> Dict[str, Any]:
     """
     Process a JSON file and apply the specified attack.
@@ -220,6 +332,9 @@ def process_json_file(
         model_name: Model name for tokenizer
         tokenizer: Pre-initialized tokenizer (optional)
         min_output_length: Minimum output length to truncate before attack (default: 200)
+        api_key: OpenAI API key for paraphrase attack
+        api_model: OpenAI model for paraphrase attack
+        temperature: Temperature for paraphrase generation
 
     Returns:
         Statistics about the attack
@@ -273,7 +388,10 @@ def process_json_file(
                         attack_type,
                         ratio,
                         seed=seed + idx if seed is not None else None,
-                        tokenizer=tokenizer
+                        tokenizer=tokenizer,
+                        api_key=api_key,
+                        api_model=api_model,
+                        temperature=temperature
                     )
 
                     # Decode attacked IDs to get text
@@ -330,7 +448,10 @@ def process_directory(
     ratio: float = 0.2,
     seed: int = None,
     model_name: str = "GSAI-ML/LLaDA-8B-Instruct",
-    min_output_length: int = 200
+    min_output_length: int = 200,
+    api_key: str = None,
+    api_model: str = "gpt-3.5-turbo",
+    temperature: float = 0.7
 ) -> None:
     """
     Process all JSON files in a directory and save attacked versions.
@@ -343,6 +464,9 @@ def process_directory(
         seed: Random seed
         model_name: Model name for tokenizer
         min_output_length: Minimum output length to truncate before attack (default: 200)
+        api_key: OpenAI API key for paraphrase attack
+        api_model: OpenAI model for paraphrase attack
+        temperature: Temperature for paraphrase generation
     """
     # Auto-generate output directory name if not provided
     if output_dir is None:
@@ -368,7 +492,11 @@ def process_directory(
     print(f"Input directory: {input_dir}")
     print(f"Output directory: {output_dir}")
     print(f"Attack type: {attack_type}")
-    print(f"Attack ratio: {ratio:.1%}")
+    if attack_type != 'paraphrase':
+        print(f"Attack ratio: {ratio:.1%}")
+    else:
+        print(f"API model: {api_model}")
+        print(f"Temperature: {temperature}")
     print(f"Min output length (truncate before attack): {min_output_length}")
     print(f"Files to process: {len(json_files)}")
     print(f"Random seed: {seed}")
@@ -404,7 +532,10 @@ def process_directory(
                 seed,
                 model_name,
                 tokenizer,
-                min_output_length
+                min_output_length,
+                api_key,
+                api_model,
+                temperature
             )
             
             # Update overall statistics
@@ -428,10 +559,12 @@ def process_directory(
         'output_directory': output_dir,
         'attack_configuration': {
             'type': attack_type,
-            'ratio': ratio,
+            'ratio': ratio if attack_type != 'paraphrase' else None,
             'seed': seed,
             'model': model_name,
-            'min_output_length': min_output_length
+            'min_output_length': min_output_length,
+            'api_model': api_model if attack_type == 'paraphrase' else None,
+            'temperature': temperature if attack_type == 'paraphrase' else None
         },
         'statistics': {
             'files_processed': overall_stats['files_processed'],
@@ -513,7 +646,7 @@ def main():
         "--attack",
         type=str,
         default='swap',
-        choices=['swap', 'delete', 'insert', 'synonym'],
+        choices=['swap', 'delete', 'insert', 'synonym', 'paraphrase'],
         help="Type of attack to apply (default: swap)"
     )
     
@@ -545,12 +678,41 @@ def main():
         help="Minimum output length to truncate to before applying attack (default: 200)"
     )
 
+    # OpenAI API arguments for paraphrase attack
+    parser.add_argument(
+        "--api-key",
+        type=str,
+        default=None,
+        help="OpenAI API key (can also be set via OPENAI_API_KEY environment variable)"
+    )
+
+    parser.add_argument(
+        "--api-model",
+        type=str,
+        default="gpt-3.5-turbo",
+        help="OpenAI model to use for paraphrase attack (default: gpt-3.5-turbo)"
+    )
+
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.7,
+        help="Temperature for paraphrase generation (default: 0.7)"
+    )
+
     args = parser.parse_args()
-    
+
     # Check if input exists
     if not os.path.exists(args.input):
         print(f"Error: Input path '{args.input}' not found")
         return
+
+    # Check API key for paraphrase attack
+    if args.attack == 'paraphrase':
+        if not args.api_key and not os.getenv("OPENAI_API_KEY"):
+            print(f"Error: OpenAI API key required for paraphrase attack.")
+            print(f"Either set OPENAI_API_KEY environment variable or use --api-key argument")
+            return
     
     # Process based on input type
     if os.path.isfile(args.input):
@@ -582,7 +744,10 @@ def main():
             args.seed,
             args.model,
             tokenizer,
-            args.min_output_length
+            args.min_output_length,
+            args.api_key,
+            args.api_model,
+            args.temperature
         )
         
         print(f"\nAttack complete!")
@@ -599,7 +764,10 @@ def main():
             args.ratio,
             args.seed,
             args.model,
-            args.min_output_length
+            args.min_output_length,
+            args.api_key,
+            args.api_model,
+            args.temperature
         )
     else:
         print(f"Error: '{args.input}' is neither a file nor a directory")

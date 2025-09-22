@@ -243,13 +243,15 @@ def process_json_file(
         max_tokens: Maximum number of tokens to analyze (None = analyze all)
         manual_config: Manual watermark config to use if no metadata in JSON
     """
+    # Get file basename for error messages
+    file_basename = os.path.basename(input_file)
+    
     # Load the JSON data
     try:
         with open(input_file, 'r') as f:
             results = json.load(f)
     except (IOError, OSError, json.JSONDecodeError) as e:
         if show_progress:
-            file_basename = os.path.basename(input_file)
             if file_num:
                 tqdm.write(f"  ❌ Error reading {file_basename}: {e}")
             else:
@@ -258,7 +260,6 @@ def process_json_file(
     
     if not results:
         if show_progress:
-            file_basename = os.path.basename(input_file)
             if file_num:
                 tqdm.write(f"  ⏭️ Skip {file_basename}: Empty file")
             else:
@@ -292,7 +293,6 @@ def process_json_file(
         watermark = initialize_watermark(watermark_metadata, bitmap_dir, bitmap_device)
     except FileNotFoundError as e:
         if show_progress:
-            file_basename = os.path.basename(input_file)
             if file_num:
                 tqdm.write(f"  ❌ Bitmap error for {file_basename}: {str(e).split(':')[0]}")
             else:
@@ -302,7 +302,6 @@ def process_json_file(
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     
     # Prepare progress bar description
-    file_basename = os.path.basename(input_file)
     if file_num is not None and total_files is not None:
         # Truncate filename if too long but keep the extension visible
         if len(file_basename) > 35:

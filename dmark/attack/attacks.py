@@ -205,11 +205,12 @@ def process_json_file(
     ratio: float = 0.2,
     seed: int = None,
     model_name: str = "GSAI-ML/LLaDA-8B-Instruct",
-    tokenizer: Optional[Any] = None
+    tokenizer: Optional[Any] = None,
+    min_output_length: int = 200
 ) -> Dict[str, Any]:
     """
     Process a JSON file and apply the specified attack.
-    
+
     Args:
         input_file: Path to input JSON file
         output_file: Path to output JSON file
@@ -218,7 +219,8 @@ def process_json_file(
         seed: Random seed
         model_name: Model name for tokenizer
         tokenizer: Pre-initialized tokenizer (optional)
-    
+        min_output_length: Minimum output length to truncate before attack (default: 200)
+
     Returns:
         Statistics about the attack
     """
@@ -257,6 +259,14 @@ def process_json_file(
             
             if output_ids is not None:
                 try:
+                    # Truncate to min_output_length before attack
+                    original_full_length = len(output_ids)
+                    if len(output_ids) > min_output_length:
+                        output_ids = output_ids[:min_output_length]
+                        truncation_applied = True
+                    else:
+                        truncation_applied = False
+
                     # Apply attack
                     attacked_ids, attack_metadata = apply_attack(
                         output_ids,
@@ -265,20 +275,28 @@ def process_json_file(
                         seed=seed + idx if seed is not None else None,
                         tokenizer=tokenizer
                     )
-                    
+
                     # Decode attacked IDs to get text
                     attacked_text = tokenizer.decode(attacked_ids, skip_special_tokens=True)
-                    
+
                     # Add new fields for attacked data (don't replace original fields)
                     attacked_result['data']['attacked_ids'] = attacked_ids
                     attacked_result['data']['attacked_text'] = attacked_text
-                    
+
                     # Track which field was used as source
                     if 'truncated_output_ids' in result['data']:
                         attack_metadata['source_field'] = 'truncated_output_ids'
                     else:
                         attack_metadata['source_field'] = 'output_ids'
-                    
+
+                    # Add truncation info to metadata
+                    attack_metadata['pre_attack_truncation'] = {
+                        'applied': truncation_applied,
+                        'original_full_length': original_full_length,
+                        'truncated_to': len(output_ids) if truncation_applied else original_full_length,
+                        'min_output_length': min_output_length
+                    }
+
                     # Add attack metadata
                     attacked_result['attack_metadata'] = attack_metadata
                     
@@ -311,11 +329,12 @@ def process_directory(
     attack_type: str = 'swap',
     ratio: float = 0.2,
     seed: int = None,
-    model_name: str = "GSAI-ML/LLaDA-8B-Instruct"
+    model_name: str = "GSAI-ML/LLaDA-8B-Instruct",
+    min_output_length: int = 200
 ) -> None:
     """
     Process all JSON files in a directory and save attacked versions.
-    
+
     Args:
         input_dir: Directory containing input JSON files
         output_dir: Directory to save attacked files (auto-generated if None)
@@ -323,6 +342,7 @@ def process_directory(
         ratio: Attack ratio
         seed: Random seed
         model_name: Model name for tokenizer
+        min_output_length: Minimum output length to truncate before attack (default: 200)
     """
     # Auto-generate output directory name if not provided
     if output_dir is None:
@@ -349,6 +369,7 @@ def process_directory(
     print(f"Output directory: {output_dir}")
     print(f"Attack type: {attack_type}")
     print(f"Attack ratio: {ratio:.1%}")
+    print(f"Min output length (truncate before attack): {min_output_length}")
     print(f"Files to process: {len(json_files)}")
     print(f"Random seed: {seed}")
     print(f"Model: {model_name}")
@@ -382,7 +403,8 @@ def process_directory(
                 ratio,
                 seed,
                 model_name,
-                tokenizer
+                tokenizer,
+                min_output_length
             )
             
             # Update overall statistics
@@ -408,7 +430,8 @@ def process_directory(
             'type': attack_type,
             'ratio': ratio,
             'seed': seed,
-            'model': model_name
+            'model': model_name,
+            'min_output_length': min_output_length
         },
         'statistics': {
             'files_processed': overall_stats['files_processed'],
@@ -514,7 +537,14 @@ def main():
         default="GSAI-ML/LLaDA-8B-Instruct",
         help="Model name for tokenizer (default: GSAI-ML/LLaDA-8B-Instruct)"
     )
-    
+
+    parser.add_argument(
+        "--min-output-length",
+        type=int,
+        default=200,
+        help="Minimum output length to truncate to before applying attack (default: 200)"
+    )
+
     args = parser.parse_args()
     
     # Check if input exists
@@ -551,7 +581,8 @@ def main():
             args.ratio,
             args.seed,
             args.model,
-            tokenizer
+            tokenizer,
+            args.min_output_length
         )
         
         print(f"\nAttack complete!")
@@ -567,7 +598,8 @@ def main():
             args.attack,
             args.ratio,
             args.seed,
-            args.model
+            args.model,
+            args.min_output_length
         )
     else:
         print(f"Error: '{args.input}' is neither a file nor a directory")

@@ -67,19 +67,19 @@ def extract_generation_config(results: List[Dict]) -> Dict[str, any]:
 def extract_watermark_config(results: List[Dict]) -> Dict[str, any]:
     """
     Extract watermark configuration from the first instance in results.
-    
+
     Args:
         results: List of result dictionaries
-    
+
     Returns:
         Dictionary with watermark configuration
     """
     if not results:
         return {}
-    
+
     # Get metadata from first result
     first_result = results[0]
-    
+
     if 'watermark_metadata' in first_result and first_result['watermark_metadata']:
         wm_meta = first_result['watermark_metadata']
         return {
@@ -90,7 +90,53 @@ def extract_watermark_config(results: List[Dict]) -> Dict[str, any]:
             'prebias': wm_meta.get('prebias'),
             'strategy': wm_meta.get('strategy')
         }
-    
+
+    return {}
+
+
+def extract_attack_config(results: List[Dict]) -> Dict[str, any]:
+    """
+    Extract attack configuration from the first instance in results.
+
+    Args:
+        results: List of result dictionaries
+
+    Returns:
+        Dictionary with attack configuration
+    """
+    if not results:
+        return {}
+
+    # Get metadata from first result
+    first_result = results[0]
+
+    if 'attack_metadata' in first_result and first_result['attack_metadata']:
+        attack_meta = first_result['attack_metadata']
+        config = {
+            'type': attack_meta.get('type'),
+            'ratio': attack_meta.get('ratio'),
+            'seed': attack_meta.get('seed'),
+            'source_field': attack_meta.get('source_field')
+        }
+
+        # Add pre-attack truncation info if present
+        if 'pre_attack_truncation' in attack_meta:
+            truncation = attack_meta['pre_attack_truncation']
+            config['pre_attack_truncation'] = {
+                'applied': truncation.get('applied'),
+                'min_output_length': truncation.get('min_output_length'),
+                'original_full_length': truncation.get('original_full_length'),
+                'truncated_to': truncation.get('truncated_to')
+            }
+
+        # Add paraphrase-specific fields if present
+        if attack_meta.get('type') == 'paraphrase':
+            config['api_provider'] = attack_meta.get('api_provider')
+            config['api_model'] = attack_meta.get('api_model')
+            config['temperature'] = attack_meta.get('temperature')
+
+        return config
+
     return {}
 
 
@@ -208,7 +254,8 @@ def process_single_file(
     file_path: str,
     threshold_loader: ThresholdLoader,
     z_score_type: str = 'auto',
-    repeat_ratio: float = 1.0
+    repeat_ratio: float = 1.0,
+    extract_attack: bool = False
 ) -> Optional[Dict]:
     """
     Process a single JSON file to calculate TPR for different FPR thresholds.
@@ -235,6 +282,7 @@ def process_single_file(
     # Extract configurations
     gen_config = extract_generation_config(results)
     wm_config = extract_watermark_config(results)
+    attack_config = extract_attack_config(results) if extract_attack else None
     
     # Skip if no watermark metadata (non-watermarked file)
     if not wm_config:
@@ -297,7 +345,7 @@ def process_single_file(
         }
     }
     
-    return {
+    result_dict = {
         'file': os.path.basename(file_path),
         'gen_config': gen_config,
         'wm_config': wm_config,
@@ -307,6 +355,11 @@ def process_single_file(
         'z_scores': z_scores  # Include raw scores if needed
     }
 
+    if extract_attack and attack_config:
+        result_dict['attack_config'] = attack_config
+
+    return result_dict
+
 
 def save_results(
     all_results: List[Dict],
@@ -314,7 +367,8 @@ def save_results(
     fprs: List[float],
     threshold_config_path: str,
     z_score_type: str,
-    repeat_ratio: float
+    repeat_ratio: float,
+    extract_attack: bool = False
 ) -> None:
     """
     Save TPR analysis results to CSV and JSON files.
@@ -335,7 +389,8 @@ def save_results(
             'threshold_config': threshold_config_path,
             'z_score_type': z_score_type,
             'fprs': fprs,
-            'repeat_ratio': repeat_ratio
+            'repeat_ratio': repeat_ratio,
+            'extract_attack': extract_attack
         },
         'results': all_results
     }
@@ -351,14 +406,25 @@ def save_results(
     headers = [
         'file',
         # Generation config
-        'model', 'dataset', 'steps', 'gen_length', 'block_length', 
+        'model', 'dataset', 'steps', 'gen_length', 'block_length',
         'temperature', 'cfg_scale', 'remasking',
         # Watermark config
         'wm_strategy', 'wm_ratio', 'wm_delta', 'wm_key', 'wm_prebias',
-        # Statistics
-        'z_score_version', 'n_samples', 'mean_zscore', 'std_zscore', 
-        'min_zscore', 'max_zscore', 'median_zscore'
     ]
+
+    # Add attack config headers if extracting attacks
+    if extract_attack:
+        headers.extend([
+            'attack_type', 'attack_ratio', 'attack_seed', 'attack_source_field',
+            'attack_truncation_applied', 'attack_min_output_length',
+            'attack_api_provider', 'attack_api_model', 'attack_temperature'
+        ])
+
+    # Add statistics headers
+    headers.extend([
+        'z_score_version', 'n_samples', 'mean_zscore', 'std_zscore',
+        'min_zscore', 'max_zscore', 'median_zscore'
+    ])
     
     # Add TPR columns for each FPR
     for fpr in fprs:
@@ -395,7 +461,38 @@ def save_results(
                 'wm_delta': wm_cfg.get('delta'),
                 'wm_key': wm_cfg.get('key'),
                 'wm_prebias': wm_cfg.get('prebias'),
-                # Statistics
+            }
+
+            # Add attack config if available
+            if extract_attack and 'attack_config' in result:
+                attack_cfg = result['attack_config']
+                row.update({
+                    'attack_type': attack_cfg.get('type'),
+                    'attack_ratio': attack_cfg.get('ratio'),
+                    'attack_seed': attack_cfg.get('seed'),
+                    'attack_source_field': attack_cfg.get('source_field'),
+                    'attack_truncation_applied': attack_cfg.get('pre_attack_truncation', {}).get('applied') if attack_cfg.get('pre_attack_truncation') else None,
+                    'attack_min_output_length': attack_cfg.get('pre_attack_truncation', {}).get('min_output_length') if attack_cfg.get('pre_attack_truncation') else None,
+                    'attack_api_provider': attack_cfg.get('api_provider'),
+                    'attack_api_model': attack_cfg.get('api_model'),
+                    'attack_temperature': attack_cfg.get('temperature')
+                })
+            elif extract_attack:
+                # Fill with None if no attack config found
+                row.update({
+                    'attack_type': None,
+                    'attack_ratio': None,
+                    'attack_seed': None,
+                    'attack_source_field': None,
+                    'attack_truncation_applied': None,
+                    'attack_min_output_length': None,
+                    'attack_api_provider': None,
+                    'attack_api_model': None,
+                    'attack_temperature': None
+                })
+
+            # Add statistics
+            row.update({
                 'z_score_version': result['z_score_version'],
                 'n_samples': result['statistics']['n_samples'],
                 'mean_zscore': f"{result['statistics']['mean']:.4f}",
@@ -403,7 +500,7 @@ def save_results(
                 'min_zscore': f"{result['statistics']['min']:.4f}",
                 'max_zscore': f"{result['statistics']['max']:.4f}",
                 'median_zscore': f"{result['statistics']['median']:.4f}"
-            }
+            })
             
             # Add TPR data for each FPR
             for fpr_key, tpr_data in result['tpr_results'].items():
@@ -465,6 +562,12 @@ def main():
         default=1.0,
         help="Maximum allowed token repetition ratio, skip instances exceeding this (default: 1.0 = no filtering)"
     )
+
+    parser.add_argument(
+        "--extract-attack",
+        action="store_true",
+        help="Extract and include attack configuration in the output"
+    )
     
     args = parser.parse_args()
     
@@ -510,7 +613,7 @@ def main():
     skipped_files = []
     
     for file_path in tqdm(json_files, desc="Processing files"):
-        result = process_single_file(file_path, threshold_loader, args.z_score_type, args.repeat_ratio)
+        result = process_single_file(file_path, threshold_loader, args.z_score_type, args.repeat_ratio, args.extract_attack)
         
         if result:
             all_results.append(result)
@@ -537,7 +640,7 @@ def main():
     output_path = os.path.join(output_dir, f"{input_dir_name}_tpr_analysis")
     
     # Save results
-    save_results(all_results, output_path, fprs, args.threshold_config, args.z_score_type, args.repeat_ratio)
+    save_results(all_results, output_path, fprs, args.threshold_config, args.z_score_type, args.repeat_ratio, args.extract_attack)
     
     # Print summary
     print("\n" + "="*70)
@@ -583,11 +686,11 @@ def main():
         if wm_key not in config_groups:
             config_groups[wm_key] = []
         config_groups[wm_key].append(result)
-    
+
     for (strategy, ratio, delta, key), group_results in config_groups.items():
         print(f"\n  Strategy={strategy}, Ratio={ratio}, Delta={delta}, Key={key}:")
         print(f"    Files: {len(group_results)}")
-        
+
         # Calculate average TPR for this configuration
         for fpr in fprs:
             fpr_key = str(fpr)
@@ -596,6 +699,38 @@ def main():
                 avg_tpr = np.mean(tprs)
                 std_tpr = np.std(tprs)
                 print(f"    FPR {fpr*100:.2f}%: TPR = {avg_tpr:.4f} ± {std_tpr:.4f}")
+
+    # Group by attack configuration if extracted
+    if args.extract_attack:
+        print("\nTPR by attack configuration:")
+        attack_groups = {}
+        for result in all_results:
+            if 'attack_config' in result and result['attack_config']:
+                attack_cfg = result['attack_config']
+                attack_key = (
+                    attack_cfg.get('type'),
+                    attack_cfg.get('ratio'),
+                    attack_cfg.get('seed')
+                )
+                if attack_key not in attack_groups:
+                    attack_groups[attack_key] = []
+                attack_groups[attack_key].append(result)
+
+        if attack_groups:
+            for (attack_type, attack_ratio, attack_seed), group_results in attack_groups.items():
+                print(f"\n  Attack Type={attack_type}, Ratio={attack_ratio}, Seed={attack_seed}:")
+                print(f"    Files: {len(group_results)}")
+
+                # Calculate average TPR for this attack configuration
+                for fpr in fprs:
+                    fpr_key = str(fpr)
+                    tprs = [r['tpr_results'][fpr_key]['tpr'] for r in group_results if fpr_key in r['tpr_results']]
+                    if tprs:
+                        avg_tpr = np.mean(tprs)
+                        std_tpr = np.std(tprs)
+                        print(f"    FPR {fpr*100:.2f}%: TPR = {avg_tpr:.4f} ± {std_tpr:.4f}")
+        else:
+            print("  No attack configurations found in results")
 
 
 if __name__ == "__main__":

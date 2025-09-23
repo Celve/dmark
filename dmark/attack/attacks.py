@@ -9,6 +9,8 @@ from transformers import AutoTokenizer
 from datetime import datetime
 import time
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 
 @dataclass
@@ -25,6 +27,7 @@ class AttackConfig:
     api_model: str = "gpt-3.5-turbo"
     temperature: float = 0.7
     max_retries: int = 3
+    max_concurrent: int = 10  # Maximum concurrent paraphrase tasks
 
     def __post_init__(self):
         """Validate and set up configuration."""
@@ -329,12 +332,20 @@ class AttackProcessor:
 
         return attacked_result
 
+    def process_sample_concurrent(self, args):
+        """Process a sample for concurrent execution."""
+        result, idx = args
+        try:
+            return self.process_sample(result, idx)
+        except Exception as e:
+            print(f"  Warning: Failed to attack sample {idx}: {e}")
+            return result
+
     def process_file(self, input_file: str, output_file: str) -> Dict[str, Any]:
         """Process a JSON file and apply attacks."""
         with open(input_file, 'r') as f:
             results = json.load(f)
 
-        attacked_results = []
         stats = {
             'total_samples': len(results),
             'successful_attacks': 0,
@@ -343,6 +354,23 @@ class AttackProcessor:
             'attacked_lengths': [],
             'tokens_affected': []
         }
+
+        # Use concurrent processing for paraphrase attacks
+        if self.config.attack_type == 'paraphrase' and len(results) > 1:
+            attacked_results = self._process_concurrent(results, stats)
+        else:
+            # Sequential processing for other attacks or single sample
+            attacked_results = self._process_sequential(results, stats)
+
+        # Save results
+        with open(output_file, 'w') as f:
+            json.dump(attacked_results, f, indent=4)
+
+        return stats
+
+    def _process_sequential(self, results: List[dict], stats: Dict[str, Any]) -> List[dict]:
+        """Process samples sequentially."""
+        attacked_results = []
 
         for idx, result in enumerate(results):
             try:
@@ -365,11 +393,57 @@ class AttackProcessor:
                 stats['failed_attacks'] += 1
                 attacked_results.append(result)
 
-        # Save results
-        with open(output_file, 'w') as f:
-            json.dump(attacked_results, f, indent=4)
+        return attacked_results
 
-        return stats
+    def _process_concurrent(self, results: List[dict], stats: Dict[str, Any]) -> List[dict]:
+        """Process samples concurrently using thread pool."""
+        attacked_results = [None] * len(results)
+        stats_lock = threading.Lock()  # Thread safety for statistics
+
+        # Prepare tasks
+        tasks = [(result, idx) for idx, result in enumerate(results)]
+
+        # Process with progress bar
+        with ThreadPoolExecutor(max_workers=self.config.max_concurrent) as executor:
+            # Submit all tasks
+            future_to_idx = {
+                executor.submit(self.process_sample_concurrent, task): task[1]
+                for task in tasks
+            }
+
+            # Process completed futures with progress bar
+            with tqdm(total=len(tasks), desc=f"Paraphrasing (concurrent={self.config.max_concurrent})", leave=False) as pbar:
+                for future in as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+
+                    try:
+                        attacked_result = future.result()
+                        attacked_results[idx] = attacked_result
+
+                        # Update statistics with thread safety
+                        with stats_lock:
+                            if 'attack_metadata' in attacked_result:
+                                metadata = attacked_result['attack_metadata']
+                                stats['successful_attacks'] += 1
+                                stats['original_lengths'].append(metadata['original_length'])
+                                stats['attacked_lengths'].append(metadata['attacked_length'])
+                                stats['tokens_affected'].append(metadata['tokens_affected'])
+                            else:
+                                stats['failed_attacks'] += 1
+
+                    except Exception as e:
+                        print(f"  Warning: Failed to attack sample {idx}: {e}")
+                        with stats_lock:
+                            stats['failed_attacks'] += 1
+                        attacked_results[idx] = results[idx]
+
+                    pbar.update(1)
+                    pbar.set_postfix({
+                        '✅': stats['successful_attacks'],
+                        '❌': stats['failed_attacks']
+                    })
+
+        return attacked_results
 
     def process_directory(self, input_dir: str, output_dir: str) -> None:
         """Process all JSON files in a directory."""
@@ -447,6 +521,7 @@ class AttackProcessor:
         else:
             print(f"API model: {self.config.api_model}")
             print(f"Temperature: {self.config.temperature}")
+            print(f"Max concurrent tasks: {self.config.max_concurrent}")
 
         print(f"Min output length (truncate before attack): {self.config.min_output_length}")
         print(f"Files to process: {num_files}")
@@ -606,6 +681,13 @@ def main():
         help="Temperature for paraphrase generation (default: 0.7)"
     )
 
+    parser.add_argument(
+        "--max-concurrent",
+        type=int,
+        default=10,
+        help="Maximum concurrent tasks for paraphrase attack (default: 10)"
+    )
+
     args = parser.parse_args()
 
     # Check if input exists
@@ -623,7 +705,8 @@ def main():
             model_name=args.model,
             api_key=args.api_key,
             api_model=args.api_model,
-            temperature=args.temperature
+            temperature=args.temperature,
+            max_concurrent=args.max_concurrent
         )
     except ValueError as e:
         print(f"Configuration error: {e}")

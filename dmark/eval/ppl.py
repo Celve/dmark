@@ -42,17 +42,24 @@ def process_json_file(
     input_file: str,
     output_file: str,
     ppl_calculator: PPLCalculator
-) -> None:
+) -> bool:
     """Process a JSON file containing generation results and add perplexity scores.
-    
+
     Args:
         input_file: Path to input JSON file
         output_file: Path to output JSON file
         ppl_calculator: PPLCalculator instance for perplexity calculation
+
+    Returns:
+        True if processing successful, False if file could not be read
     """
-    # Load the JSON data
-    with open(input_file, 'r') as f:
-        results = json.load(f)
+    # Try to load the JSON data
+    try:
+        with open(input_file, 'r') as f:
+            results = json.load(f)
+    except (IOError, OSError, json.JSONDecodeError) as e:
+        print(f"⚠️  Skipping {os.path.basename(input_file)}: Cannot read file ({type(e).__name__}: {e})")
+        return False
     
     # Process each result
     for result in tqdm(results, desc="Calculating perplexity"):
@@ -72,10 +79,10 @@ def process_json_file(
     # Save results to new file
     with open(output_file, 'w') as f:
         json.dump(results, f, indent=4)
-    
+
     print(f"Processed {len(results)} results")
     print(f"Results saved to: {output_file}")
-    
+
     # Print summary statistics
     perplexities = [r["text_quality"]["perplexity"] for r in results if r.get("text_quality") and r["text_quality"].get("perplexity") is not None]
     if perplexities:
@@ -83,6 +90,8 @@ def process_json_file(
         max_ppl = max(perplexities)
         min_ppl = min(perplexities)
         print(f"Perplexity statistics: avg={avg_ppl:.2f}, min={min_ppl:.2f}, max={max_ppl:.2f}")
+
+    return True
 
 
 def main():
@@ -172,13 +181,26 @@ def main():
         print(f"Found {len(json_files)} JSON files to process")
         print(f"Output directory: {output_dir}")
         
+        successful = 0
+        failed = 0
+
         for json_file in json_files:
             input_path = os.path.join(args.input, json_file)
             output_name = json_file.replace(".json", f"_{args.tag}.json")
             output_path = os.path.join(output_dir, output_name)
-            
+
             print(f"\nProcessing: {json_file}")
-            process_json_file(input_path, output_path, ppl_calculator)
+            if process_json_file(input_path, output_path, ppl_calculator):
+                successful += 1
+            else:
+                failed += 1
+
+        # Print summary
+        print(f"\n{'='*50}")
+        print(f"Processing complete:")
+        print(f"  ✅ Successfully processed: {successful} files")
+        if failed > 0:
+            print(f"  ❌ Failed/Skipped: {failed} files")
             
     elif os.path.isfile(args.input):
         # Input is a file
@@ -191,7 +213,8 @@ def main():
             # Save alongside input file with tag
             output_file = args.input.replace(".json", f"_{args.tag}.json")
         
-        process_json_file(args.input, output_file, ppl_calculator)
+        if not process_json_file(args.input, output_file, ppl_calculator):
+            print(f"❌ Failed to process file")
     else:
         print(f"Error: '{args.input}' is neither a file nor a directory")
         return

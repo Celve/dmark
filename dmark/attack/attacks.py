@@ -22,9 +22,10 @@ class AttackConfig:
     min_output_length: int = 200
     model_name: str = "GSAI-ML/LLaDA-8B-Instruct"
 
-    # OpenAI API settings for paraphrase
+    # API settings for paraphrase
+    api_provider: str = "openai"  # "openai" or "gemini"
     api_key: Optional[str] = None
-    api_model: str = "gpt-3.5-turbo"
+    api_model: str = "gpt-3.5-turbo"  # Or "gemini-pro" for Gemini
     temperature: float = 0.7
     max_retries: int = 3
     max_concurrent: int = 10  # Maximum concurrent paraphrase tasks
@@ -34,12 +35,17 @@ class AttackConfig:
         if self.attack_type == 'paraphrase':
             # Check for API key in environment if not provided
             if self.api_key is None:
-                self.api_key = os.getenv("OPENAI_API_KEY")
+                if self.api_provider == "openai":
+                    self.api_key = os.getenv("OPENAI_API_KEY")
+                elif self.api_provider == "gemini":
+                    self.api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
 
             if not self.api_key:
+                provider_name = self.api_provider.upper()
+                env_var = "OPENAI_API_KEY" if self.api_provider == "openai" else "GEMINI_API_KEY or GOOGLE_API_KEY"
                 raise ValueError(
-                    "OpenAI API key required for paraphrase attack. "
-                    "Set OPENAI_API_KEY environment variable or provide api_key."
+                    f"{provider_name} API key required for paraphrase attack. "
+                    f"Set {env_var} environment variable or provide api_key."
                 )
 
 
@@ -179,12 +185,28 @@ class SynonymAttack(BaseAttack):
 
 
 class ParaphraseAttack(BaseAttack):
-    """Paraphrase text using OpenAI API."""
+    """Paraphrase text using OpenAI or Gemini API."""
 
     def apply(self, token_ids: List[int], idx: int = 0) -> Tuple[List[int], Dict[str, Any]]:
         if self.tokenizer is None:
             raise ValueError("Tokenizer is required for paraphrase attack")
 
+        # Decode tokens to text
+        original_text = self.tokenizer.decode(token_ids, skip_special_tokens=True)
+
+        if not original_text.strip():
+            return token_ids, self.get_metadata(len(token_ids), len(token_ids), 0)
+
+        # Route to appropriate API
+        if self.config.api_provider == "openai":
+            return self._apply_openai(token_ids, original_text, idx)
+        elif self.config.api_provider == "gemini":
+            return self._apply_gemini(token_ids, original_text, idx)
+        else:
+            raise ValueError(f"Unsupported API provider: {self.config.api_provider}")
+
+    def _apply_openai(self, token_ids: List[int], original_text: str, idx: int) -> Tuple[List[int], Dict[str, Any]]:
+        """Apply paraphrase using OpenAI API."""
         try:
             import openai
             from openai import OpenAI
@@ -194,31 +216,21 @@ class ParaphraseAttack(BaseAttack):
         # Initialize OpenAI client
         client = OpenAI(api_key=self.config.api_key)
 
-        # Decode tokens to text
-        original_text = self.tokenizer.decode(token_ids, skip_special_tokens=True)
-
-        if not original_text.strip():
-            return token_ids, self.get_metadata(len(token_ids), len(token_ids), 0)
-
         # Create paraphrasing prompt
-        prompt = f"""Please paraphrase the following text while preserving its meaning.
-Make the paraphrase natural and fluent but different from the original:
+        prompt = f"""Please paraphrase the following text while preserving its meaning. Output only the rewritten text, nothing else:
 
-Text: {original_text}
-
-Paraphrased version:"""
+{original_text}"""
 
         # Try to get paraphrase with retries
         for attempt in range(self.config.max_retries):
             try:
                 response = client.responses.create(
-                    model="gpt-5",
+                    model=self.config.api_model,
                     input=[
-                        {"role": "system", "content": "You are a helpful assistant that paraphrases text while preserving meaning."},
+                        {"role": "system", "content": "You are a paraphrasing assistant. Output only the paraphrased text without any additional comments, explanations, or formatting."},
                         {"role": "user", "content": prompt},
                     ],
                     temperature=self.config.temperature,
-                    max_output_tokens=1024,  # or another safe cap
                 )
 
                 paraphrased_text = response.output_text
@@ -228,6 +240,58 @@ Paraphrased version:"""
                 tokens_affected = abs(len(paraphrased_ids) - len(token_ids)) + min(len(paraphrased_ids), len(token_ids))
 
                 metadata = self.get_metadata(len(token_ids), len(paraphrased_ids), tokens_affected)
+                metadata['api_provider'] = self.config.api_provider
+                metadata['api_model'] = self.config.api_model
+                metadata['temperature'] = self.config.temperature
+
+                return paraphrased_ids, metadata
+
+            except Exception as e:
+                if attempt < self.config.max_retries - 1:
+                    wait_time = (2 ** attempt) + random.uniform(0, 1)
+                    print(f"  API error (attempt {attempt + 1}/{self.config.max_retries}): {e}. Retrying in {wait_time:.1f}s...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"  Failed to paraphrase after {self.config.max_retries} attempts: {e}")
+                    return token_ids, self.get_metadata(len(token_ids), len(token_ids), 0)
+
+        return token_ids, self.get_metadata(len(token_ids), len(token_ids), 0)
+
+    def _apply_gemini(self, token_ids: List[int], original_text: str, idx: int) -> Tuple[List[int], Dict[str, Any]]:
+        """Apply paraphrase using Gemini API."""
+        try:
+            from google import genai
+            from google.genai import types
+        except ImportError:
+            raise ImportError("google-generativeai package not installed. Install with: pip install google-generativeai")
+
+        # Initialize model
+        client = genai.Client()
+
+        # Create paraphrasing prompt
+        prompt = f"""Please paraphrase the following text while preserving its meaning. Output only the rewritten text, nothing else:
+
+{original_text}"""
+
+        # Try to get paraphrase with retries
+        for attempt in range(self.config.max_retries):
+            try:
+                response = client.models.generate_content(
+                    model=self.config.api_model,
+                    config=types.GenerateContentConfig(
+                        system_instruction="You are a paraphrasing assistant. Output only the paraphrased text without any additional comments, explanations, or formatting."
+                    ),
+                    contents=prompt
+                )
+
+                paraphrased_text = response.text.strip()
+                paraphrased_ids = self.tokenizer.encode(paraphrased_text, add_special_tokens=False)
+
+                # Calculate tokens affected (approximation for paraphrase)
+                tokens_affected = abs(len(paraphrased_ids) - len(token_ids)) + min(len(paraphrased_ids), len(token_ids))
+
+                metadata = self.get_metadata(len(token_ids), len(paraphrased_ids), tokens_affected)
+                metadata['api_provider'] = self.config.api_provider
                 metadata['api_model'] = self.config.api_model
                 metadata['temperature'] = self.config.temperature
 
@@ -519,6 +583,7 @@ class AttackProcessor:
         if self.config.attack_type != 'paraphrase':
             print(f"Attack ratio: {self.config.ratio:.1%}")
         else:
+            print(f"API provider: {self.config.api_provider}")
             print(f"API model: {self.config.api_model}")
             print(f"Temperature: {self.config.temperature}")
             print(f"Max concurrent tasks: {self.config.max_concurrent}")
@@ -541,6 +606,7 @@ class AttackProcessor:
                 'seed': self.config.seed,
                 'model': self.config.model_name,
                 'min_output_length': self.config.min_output_length,
+                'api_provider': self.config.api_provider if self.config.attack_type == 'paraphrase' else None,
                 'api_model': self.config.api_model if self.config.attack_type == 'paraphrase' else None,
                 'temperature': self.config.temperature if self.config.attack_type == 'paraphrase' else None
             },
@@ -659,25 +725,33 @@ def main():
         help="Minimum output length to truncate to before applying attack (default: 200)"
     )
 
-    # OpenAI API arguments for paraphrase attack
+    # API arguments for paraphrase attack
+    parser.add_argument(
+        "--api-provider",
+        type=str,
+        default="openai",
+        choices=["openai", "gemini"],
+        help="API provider for paraphrase attack (default: openai)"
+    )
+
     parser.add_argument(
         "--api-key",
         type=str,
         default=None,
-        help="OpenAI API key (can also be set via OPENAI_API_KEY environment variable)"
+        help="API key for paraphrase (can also be set via OPENAI_API_KEY or GEMINI_API_KEY environment variable)"
     )
 
     parser.add_argument(
         "--api-model",
         type=str,
-        default="gpt-5",
-        help="OpenAI model to use for paraphrase attack (default: gpt-5)"
+        default="gpt-3.5-turbo",
+        help="Model to use for paraphrase attack (default: gpt-3.5-turbo for OpenAI, gemini-pro for Gemini)"
     )
 
     parser.add_argument(
         "--temperature",
         type=float,
-        default=1,
+        default=0.7,
         help="Temperature for paraphrase generation (default: 0.7)"
     )
 
@@ -695,6 +769,11 @@ def main():
         print(f"Error: Input path '{args.input}' not found")
         return
 
+    # Auto-adjust api_model if not specified and using Gemini
+    api_model = args.api_model
+    if args.attack == 'paraphrase' and args.api_provider == 'gemini' and api_model == 'gpt-3.5-turbo':
+        api_model = 'gemini-pro'
+
     # Create configuration
     try:
         config = AttackConfig(
@@ -703,8 +782,9 @@ def main():
             seed=args.seed,
             min_output_length=args.min_output_length,
             model_name=args.model,
+            api_provider=args.api_provider,
             api_key=args.api_key,
-            api_model=args.api_model,
+            api_model=api_model,
             temperature=args.temperature,
             max_concurrent=args.max_concurrent
         )

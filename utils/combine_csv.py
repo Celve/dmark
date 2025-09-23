@@ -162,8 +162,8 @@ def merge_csv_files(
         'wm_strategy', 'wm_ratio', 'wm_delta', 'wm_key', 'wm_prebias'
     ]
 
-    # Read PPL CSV
-    ppl_data = {}
+    # Read PPL CSV (allow duplicates by using list)
+    ppl_data = defaultdict(list)
     with open(ppl_file, 'r') as f:
         reader = csv.DictReader(f)
         for row in reader:
@@ -186,10 +186,10 @@ def merge_csv_files(
             else:
                 full_key = (gen_key, wm_key)
 
-            ppl_data[full_key] = row
+            ppl_data[full_key].append(row)
 
-    # Read z-score CSV
-    zscore_data = {}
+    # Read z-score CSV (allow duplicates by using list)
+    zscore_data = defaultdict(list)
     with open(zscore_file, 'r') as f:
         reader = csv.DictReader(f)
         for row in reader:
@@ -212,47 +212,70 @@ def merge_csv_files(
             else:
                 full_key = (gen_key, wm_key)
 
-            zscore_data[full_key] = row
+            zscore_data[full_key].append(row)
 
-    # Find matches and merge
+    # Find matches and merge (generate all combinations)
     merged_data = []
     matched_keys = set()
+    combination_count = 0
 
-    for key, ppl_row in ppl_data.items():
+    for key, ppl_rows in ppl_data.items():
         if key in zscore_data:
-            zscore_row = zscore_data[key]
+            zscore_rows = zscore_data[key]
             matched_keys.add(key)
 
-            # Merge rows (PPL data + z-score specific data)
-            merged_row = ppl_row.copy()
+            # Generate all combinations of PPL and z-score rows
+            for ppl_row in ppl_rows:
+                for zscore_row in zscore_rows:
+                    combination_count += 1
 
-            # Add z-score specific fields
-            zscore_specific_fields = [
-                'z_score_version', 'n_samples',
-                'mean_zscore', 'std_zscore', 'min_zscore', 'max_zscore', 'median_zscore'
-            ]
+                    # Merge rows (PPL data + z-score specific data)
+                    merged_row = ppl_row.copy()
 
-            # Add TPR fields
-            tpr_fields = [k for k in zscore_row.keys() if 'tpr_at_fpr' in k or
-                         'threshold_at_fpr' in k or 'detected_at_fpr' in k]
+                    # Add z-score specific fields
+                    zscore_specific_fields = [
+                        'z_score_version', 'n_samples',
+                        'mean_zscore', 'std_zscore', 'min_zscore', 'max_zscore', 'median_zscore'
+                    ]
 
-            for field in zscore_specific_fields + tpr_fields:
-                if field in zscore_row:
-                    merged_row[field] = zscore_row[field]
+                    # Add TPR fields
+                    tpr_fields = [k for k in zscore_row.keys() if 'tpr_at_fpr' in k or
+                                 'threshold_at_fpr' in k or 'detected_at_fpr' in k]
 
-            merged_data.append(merged_row)
+                    # Add attack fields if present
+                    attack_fields = [k for k in zscore_row.keys() if k.startswith('attack_')]
+
+                    for field in zscore_specific_fields + tpr_fields + attack_fields:
+                        if field in zscore_row:
+                            merged_row[field] = zscore_row[field]
+
+                    # Create unique identifier for this combination if files have same name
+                    if ppl_row.get('file') == zscore_row.get('file') and len(ppl_rows) * len(zscore_rows) > 1:
+                        # Add combination index to filename
+                        base_file = merged_row.get('file', '')
+                        if base_file:
+                            merged_row['original_file'] = base_file
+                            merged_row['file'] = f"{base_file}_combo_{len(merged_data) + 1}"
+
+                    merged_data.append(merged_row)
 
     # Report unmatched entries
     unmatched_ppl = set(ppl_data.keys()) - matched_keys
     unmatched_zscore = set(zscore_data.keys()) - matched_keys
 
+    # Count total entries
+    total_ppl_entries = sum(len(rows) for rows in ppl_data.values())
+    total_zscore_entries = sum(len(rows) for rows in zscore_data.values())
+
     if verbose or (unmatched_ppl or unmatched_zscore):
         print(f"\nMatching Summary:")
-        print(f"  PPL entries: {len(ppl_data)}")
-        print(f"  Z-score entries: {len(zscore_data)}")
-        print(f"  Matched entries: {len(matched_keys)}")
-        print(f"  Unmatched PPL entries: {len(unmatched_ppl)}")
-        print(f"  Unmatched z-score entries: {len(unmatched_zscore)}")
+        print(f"  PPL unique keys: {len(ppl_data)} ({total_ppl_entries} total entries)")
+        print(f"  Z-score unique keys: {len(zscore_data)} ({total_zscore_entries} total entries)")
+        print(f"  Matched keys: {len(matched_keys)}")
+        print(f"  Unmatched PPL keys: {len(unmatched_ppl)}")
+        print(f"  Unmatched z-score keys: {len(unmatched_zscore)}")
+        if combination_count > len(matched_keys):
+            print(f"  Generated combinations: {combination_count} (from {len(matched_keys)} matches)")
 
         if unmatched_ppl and verbose:
             print("\n  Sample unmatched PPL entries:")
@@ -279,6 +302,8 @@ def merge_csv_files(
 
         # Order fields logically
         field_order = ['file']  # File first
+        if 'original_file' in all_fields:
+            field_order.append('original_file')  # Original file if renamed
 
         # Generation config
         field_order.extend([f for f in gen_config_fields if f in all_fields])
@@ -296,6 +321,10 @@ def merge_csv_files(
         zscore_fields = ['z_score_version', 'n_samples', 'mean_zscore', 'std_zscore',
                         'min_zscore', 'max_zscore', 'median_zscore']
         field_order.extend([f for f in zscore_fields if f in all_fields])
+
+        # Attack fields
+        attack_fields = sorted([f for f in all_fields if f.startswith('attack_')])
+        field_order.extend(attack_fields)
 
         # TPR metrics (sorted by FPR value)
         tpr_fields = sorted([f for f in all_fields if 'tpr_at_fpr' in f or
@@ -321,6 +350,11 @@ def merge_csv_files(
         datasets = set(row.get('dataset', '') for row in merged_data)
         if datasets:
             print(f"Datasets in merged file: {', '.join(sorted(filter(None, datasets)))}")
+
+        # Print combination statistics if there were multiple matches
+        if combination_count > len(matched_keys):
+            avg_combinations = combination_count / len(matched_keys) if matched_keys else 0
+            print(f"Average combinations per match: {avg_combinations:.1f}")
     else:
         print("\nNo matching entries found to merge!")
 

@@ -11,6 +11,60 @@ from typing import Dict, List, Tuple, Optional
 from collections import defaultdict
 
 
+def normalize_dataset_name(dataset_path: str) -> str:
+    """
+    Normalize dataset name to last two path components.
+    Special case: 'gsm8k' becomes 'openai/gsm8k'.
+
+    Args:
+        dataset_path: Full or partial dataset path
+
+    Returns:
+        Normalized dataset name (e.g., 'sentence-transformers/eli5', 'openai/gsm8k')
+    """
+    if not dataset_path:
+        return dataset_path
+
+    # Special case for gsm8k
+    if dataset_path == 'gsm8k':
+        return 'openai/gsm8k'
+
+    # Split by '/' and get last two parts
+    parts = dataset_path.split('/')
+    if len(parts) >= 2:
+        normalized = '/'.join(parts[-2:])
+        # Check if result is gsm8k after normalization
+        if normalized == 'gsm8k':
+            return 'openai/gsm8k'
+        return normalized
+
+    # If only one part and it's gsm8k
+    if parts[0] == 'gsm8k':
+        return 'openai/gsm8k'
+
+    return dataset_path
+
+
+def normalize_model_name(model_path: str) -> str:
+    """
+    Normalize model name to last two path components.
+
+    Args:
+        model_path: Full or partial model path
+
+    Returns:
+        Normalized model name (e.g., 'GSAI-ML/LLaDA-8B-Instruct')
+    """
+    if not model_path:
+        return model_path
+
+    # Split by '/' and get last two parts
+    parts = model_path.split('/')
+    if len(parts) >= 2:
+        return '/'.join(parts[-2:])
+    return model_path
+
+
 def normalize_key_names(row: Dict[str, str], key_mapping: Dict[str, str]) -> Dict[str, str]:
     """
     Normalize key names in a row according to the mapping.
@@ -116,6 +170,12 @@ def merge_csv_files(
             # Normalize keys
             row = normalize_key_names(row, ppl_key_mapping)
 
+            # Normalize dataset and model names
+            if 'dataset' in row:
+                row['dataset'] = normalize_dataset_name(row['dataset'])
+            if 'model' in row:
+                row['model'] = normalize_model_name(row['model'])
+
             # Create config key
             gen_key = create_config_key(row, gen_config_fields)
             wm_key = create_config_key(row, wm_config_fields)
@@ -135,6 +195,12 @@ def merge_csv_files(
         for row in reader:
             # Normalize keys
             row = normalize_key_names(row, zscore_key_mapping)
+
+            # Normalize dataset and model names
+            if 'dataset' in row:
+                row['dataset'] = normalize_dataset_name(row['dataset'])
+            if 'model' in row:
+                row['model'] = normalize_model_name(row['model'])
 
             # Create config key
             gen_key = create_config_key(row, gen_config_fields)
@@ -180,7 +246,7 @@ def merge_csv_files(
     unmatched_ppl = set(ppl_data.keys()) - matched_keys
     unmatched_zscore = set(zscore_data.keys()) - matched_keys
 
-    if verbose:
+    if verbose or (unmatched_ppl or unmatched_zscore):
         print(f"\nMatching Summary:")
         print(f"  PPL entries: {len(ppl_data)}")
         print(f"  Z-score entries: {len(zscore_data)}")
@@ -250,6 +316,11 @@ def merge_csv_files(
 
         print(f"\nMerged CSV saved to: {output_file}")
         print(f"Total merged entries: {len(merged_data)}")
+
+        # Print dataset summary
+        datasets = set(row.get('dataset', '') for row in merged_data)
+        if datasets:
+            print(f"Datasets in merged file: {', '.join(sorted(filter(None, datasets)))}")
     else:
         print("\nNo matching entries found to merge!")
 
@@ -290,6 +361,20 @@ def main():
         "--verbose",
         action="store_true",
         help="Print detailed matching information"
+    )
+
+    parser.add_argument(
+        "--normalize-dataset",
+        action="store_true",
+        default=True,
+        help="Normalize dataset names to last two segments (default: True)"
+    )
+
+    parser.add_argument(
+        "--no-normalize-dataset",
+        dest="normalize_dataset",
+        action="store_false",
+        help="Don't normalize dataset names"
     )
 
     args = parser.parse_args()

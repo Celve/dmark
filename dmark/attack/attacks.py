@@ -221,7 +221,7 @@ class ParaphraseAttack(BaseAttack):
         if self.config.api_base is None:
             client = OpenAI(api_key=self.config.api_key)
         else:
-            client = OpenAI(api_key=self.config.api_key, api_base=self.config.api_base)
+            client = OpenAI(api_key=self.config.api_key, base_url=self.config.api_base)
 
         # Create paraphrasing prompt
         prompt = f"""Please paraphrase the following text while preserving its meaning. Output only the rewritten text, nothing else:
@@ -240,6 +240,7 @@ class ParaphraseAttack(BaseAttack):
                         ],
                         temperature=self.config.temperature,
                     )
+                    paraphrased_text = response.output_text
                 else: 
                     response = client.chat.completions.create(
                         model=self.config.api_model,
@@ -248,8 +249,7 @@ class ParaphraseAttack(BaseAttack):
                             {"role": "user", "content": prompt},
                         ]
                     )
-
-                paraphrased_text = response.output_text
+                    paraphrased_text = response.choices[0].message.content
                 paraphrased_ids = self.tokenizer.encode(paraphrased_text, add_special_tokens=False)
 
                 # Calculate tokens affected (approximation for paraphrase)
@@ -896,6 +896,7 @@ def main():
             api_provider=args.api_provider,
             api_key=args.api_key,
             api_model=api_model,
+            api_base=args.api_base,
             temperature=args.temperature,
             max_concurrent=args.max_concurrent
         )

@@ -423,7 +423,8 @@ class DreamGenerationMixin:
                     x,
                     mask_token_id,
                     logits,
-                    i,
+                    attention_mask.shape[1],
+                    max_length,
                 )
 
             mask_logits = logits[mask_index]

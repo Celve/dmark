@@ -22,6 +22,9 @@ class AttackConfig:
     min_output_length: int = 200
     model_name: str = "GSAI-ML/LLaDA-8B-Instruct"
 
+    # Increment mode - skip if results already exist
+    increment_mode: bool = False
+
     # API settings for paraphrase
     api_provider: str = "openai"  # "openai" or "gemini"
     api_key: Optional[str] = None
@@ -407,6 +410,41 @@ class AttackProcessor:
 
     def process_file(self, input_file: str, output_file: str) -> Dict[str, Any]:
         """Process a JSON file and apply attacks."""
+        # Check if output already exists in increment mode
+        if self.config.increment_mode and os.path.exists(output_file):
+            print(f"  → Skipping (already exists): {output_file}")
+
+            # Try to load existing results to get statistics
+            try:
+                with open(output_file, 'r') as f:
+                    existing_results = json.load(f)
+
+                # Extract statistics from existing results
+                stats = {
+                    'total_samples': len(existing_results),
+                    'successful_attacks': 0,
+                    'failed_attacks': 0,
+                    'original_lengths': [],
+                    'attacked_lengths': [],
+                    'tokens_affected': [],
+                    'skipped': True
+                }
+
+                for result in existing_results:
+                    if 'attack_metadata' in result:
+                        metadata = result['attack_metadata']
+                        stats['successful_attacks'] += 1
+                        stats['original_lengths'].append(metadata.get('original_length', 0))
+                        stats['attacked_lengths'].append(metadata.get('attacked_length', 0))
+                        stats['tokens_affected'].append(metadata.get('tokens_affected', 0))
+                    else:
+                        stats['failed_attacks'] += 1
+
+                return stats
+            except Exception as e:
+                print(f"    Warning: Could not read existing results: {e}")
+                # Continue with processing if we can't read existing results
+
         with open(input_file, 'r') as f:
             results = json.load(f)
 
@@ -515,8 +553,18 @@ class AttackProcessor:
         if output_dir is None:
             base_dir = os.path.dirname(input_dir.rstrip('/'))
             dir_name = os.path.basename(input_dir.rstrip('/'))
-            ratio_percent = int(self.config.ratio * 100)
-            output_dir = os.path.join(base_dir, f"{dir_name}_attack_{self.config.attack_type}_{ratio_percent}")
+
+            # Generate directory suffix
+            if self.config.attack_type == 'paraphrase':
+                # For paraphrase, use model name (sanitize it for filename)
+                model_suffix = self.config.api_model.replace('/', '_').replace('\\', '_')
+                suffix = f"_attack_paraphrase_{model_suffix}"
+            else:
+                # For other attacks, use type and ratio
+                ratio_percent = int(self.config.ratio * 100)
+                suffix = f"_attack_{self.config.attack_type}_{ratio_percent}"
+
+            output_dir = os.path.join(base_dir, f"{dir_name}{suffix}")
 
         # Create output directory
         os.makedirs(output_dir, exist_ok=True)
@@ -545,10 +593,28 @@ class AttackProcessor:
             'all_tokens_affected': []
         }
 
+        # Count files to skip in increment mode
+        skipped_count = 0
+        processed_count = 0
+
         # Process each file
         for json_file in tqdm(json_files, desc="Processing files"):
             input_path = os.path.join(input_dir, json_file)
-            output_path = os.path.join(output_dir, json_file)
+
+            # Generate file suffix
+            if self.config.attack_type == 'paraphrase':
+                # For paraphrase, use model name (sanitize it for filename)
+                model_suffix = self.config.api_model.replace('/', '_').replace('\\', '_')
+                suffix = f"_attack_paraphrase_{model_suffix}"
+            else:
+                # For other attacks, use type and ratio
+                ratio_percent = int(self.config.ratio * 100)
+                suffix = f"_attack_{self.config.attack_type}_{ratio_percent}"
+
+            # Add suffix to filename before .json extension
+            base_name = json_file[:-5] if json_file.endswith('.json') else json_file
+            output_filename = f"{base_name}{suffix}.json"
+            output_path = os.path.join(output_dir, output_filename)
 
             try:
                 stats = self.process_file(input_path, output_path)
@@ -562,10 +628,20 @@ class AttackProcessor:
                 overall_stats['all_attacked_lengths'].extend(stats['attacked_lengths'])
                 overall_stats['all_tokens_affected'].extend(stats['tokens_affected'])
 
-                print(f"✓ {json_file}: {stats['successful_attacks']}/{stats['total_samples']} samples attacked")
+                if stats.get('skipped', False):
+                    skipped_count += 1
+                    print(f"⊸ {json_file}: Skipped (already exists)")
+                else:
+                    processed_count += 1
+                    print(f"✓ {json_file}: {stats['successful_attacks']}/{stats['total_samples']} samples attacked")
 
             except Exception as e:
                 print(f"✗ {json_file}: Error - {e}")
+
+        # Add skip/process counts to overall stats
+        if self.config.increment_mode:
+            overall_stats['skipped_count'] = skipped_count
+            overall_stats['processed_count'] = processed_count
 
         # Save and print summary
         self.save_summary(output_dir, input_dir, overall_stats)
@@ -579,6 +655,8 @@ class AttackProcessor:
         print(f"Input directory: {input_dir}")
         print(f"Output directory: {output_dir}")
         print(f"Attack type: {self.config.attack_type}")
+        if self.config.increment_mode:
+            print(f"Increment mode: ENABLED (skip existing results)")
 
         if self.config.attack_type != 'paraphrase':
             print(f"Attack ratio: {self.config.ratio:.1%}")
@@ -606,6 +684,7 @@ class AttackProcessor:
                 'seed': self.config.seed,
                 'model': self.config.model_name,
                 'min_output_length': self.config.min_output_length,
+                'increment_mode': self.config.increment_mode,
                 'api_provider': self.config.api_provider if self.config.attack_type == 'paraphrase' else None,
                 'api_model': self.config.api_model if self.config.attack_type == 'paraphrase' else None,
                 'temperature': self.config.temperature if self.config.attack_type == 'paraphrase' else None
@@ -615,7 +694,9 @@ class AttackProcessor:
                 'total_samples': stats['total_samples'],
                 'successful_attacks': stats['successful_attacks'],
                 'failed_attacks': stats['failed_attacks'],
-                'success_rate': stats['successful_attacks'] / stats['total_samples'] if stats['total_samples'] > 0 else 0
+                'success_rate': stats['successful_attacks'] / stats['total_samples'] if stats['total_samples'] > 0 else 0,
+                'files_skipped': stats.get('skipped_count', 0) if self.config.increment_mode else None,
+                'files_newly_processed': stats.get('processed_count', stats['files_processed']) if self.config.increment_mode else None
             }
         }
 
@@ -646,6 +727,9 @@ class AttackProcessor:
         print(f"Attack Summary")
         print(f"{'='*70}")
         print(f"Files processed: {stats['files_processed']}/{num_files}")
+        if 'skipped_count' in stats:
+            print(f"Files skipped (already exist): {stats['skipped_count']}")
+            print(f"Files newly processed: {stats['processed_count']}")
         print(f"Total samples: {stats['total_samples']}")
         print(f"Successful attacks: {stats['successful_attacks']}")
         print(f"Failed attacks: {stats['failed_attacks']}")
@@ -762,6 +846,12 @@ def main():
         help="Maximum concurrent tasks for paraphrase attack (default: 10)"
     )
 
+    parser.add_argument(
+        "--increment",
+        action="store_true",
+        help="Enable increment mode - skip files that already exist in output directory"
+    )
+
     args = parser.parse_args()
 
     # Check if input exists
@@ -782,6 +872,7 @@ def main():
             seed=args.seed,
             min_output_length=args.min_output_length,
             model_name=args.model,
+            increment_mode=args.increment,
             api_provider=args.api_provider,
             api_key=args.api_key,
             api_model=api_model,
@@ -801,9 +892,26 @@ def main():
         if args.output is None:
             dir_path = os.path.dirname(args.input)
             base_name = os.path.splitext(os.path.basename(args.input))[0]
-            output_file = os.path.join(dir_path, f"{base_name}_attack.json")
+
+            # Generate file suffix
+            if config.attack_type == 'paraphrase':
+                # For paraphrase, use model name (sanitize it for filename)
+                model_suffix = config.api_model.replace('/', '_').replace('\\', '_')
+                suffix = f"_attack_paraphrase_{model_suffix}"
+            else:
+                # For other attacks, use type and ratio
+                ratio_percent = int(config.ratio * 100)
+                suffix = f"_attack_{config.attack_type}_{ratio_percent}"
+
+            output_file = os.path.join(dir_path, f"{base_name}{suffix}.json")
         else:
             output_file = args.output
+
+        # Check if output exists in increment mode
+        if config.increment_mode and os.path.exists(output_file):
+            print(f"\nIncrement mode: Skipping {args.input}")
+            print(f"Output already exists: {output_file}")
+            return
 
         # Ensure output directory exists
         output_dir = os.path.dirname(output_file)
@@ -812,6 +920,8 @@ def main():
 
         print(f"Processing single file: {args.input}")
         print(f"Output: {output_file}")
+        if config.increment_mode:
+            print(f"Increment mode: ENABLED")
 
         # Process file
         processor.initialize()

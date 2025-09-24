@@ -254,46 +254,26 @@ class DipperAttackProcessor:
                 attacked_results.append(attacked_result)
 
         except KeyboardInterrupt:
-            print(f"\n\nInterrupted! Saving {len(attacked_results)} processed samples...")
-            # Save partial results with a marker
-            self._save_partial_results(output_file, attacked_results, stats, len(results))
-            raise
+            print(f"\n\nInterrupted! Saving {len(attacked_results)} processed samples to partial file...")
+            # Save partial results
+            if output_file.endswith('.json'):
+                partial_file = output_file[:-5] + '.partial.json'
+            else:
+                partial_file = output_file + '.partial'
+
+            with open(partial_file, 'w') as f:
+                json.dump(attacked_results, f, indent=4)
+
+            print(f"Partial results saved to: {partial_file}")
+            print(f"Processed {len(attacked_results)}/{len(results)} samples")
+            print(f"Successful: {stats['successful_attacks']}, Failed: {stats['failed_attacks']}")
+            return stats
 
         # Save results
         with open(output_file, 'w') as f:
             json.dump(attacked_results, f, indent=4)
 
         return stats
-
-    def _save_partial_results(self, output_file: str, attacked_results: List[dict],
-                              stats: Dict[str, Any], total_expected: int):
-        """Save partial results when interrupted."""
-        # Add .partial suffix before .json
-        if output_file.endswith('.json'):
-            partial_file = output_file[:-5] + '.partial.json'
-        else:
-            partial_file = output_file + '.partial'
-
-        # Add metadata about interruption
-        partial_data = {
-            '_partial_results_metadata': {
-                'interrupted': True,
-                'processed_count': len(attacked_results),
-                'total_expected': total_expected,
-                'timestamp': datetime.now().isoformat(),
-                'statistics': {
-                    'successful_attacks': stats['successful_attacks'],
-                    'failed_attacks': stats['failed_attacks']
-                }
-            },
-            'results': attacked_results
-        }
-
-        with open(partial_file, 'w') as f:
-            json.dump(partial_data, f, indent=4)
-
-        print(f"Partial results saved to: {partial_file}")
-        print(f"Processed {len(attacked_results)}/{total_expected} samples")
 
     def process_directory(self, input_dir: str, output_dir: str = None) -> None:
         """Process all JSON files in a directory."""

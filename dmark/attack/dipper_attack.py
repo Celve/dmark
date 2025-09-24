@@ -237,26 +237,63 @@ class DipperAttackProcessor:
 
         attacked_results = []
 
-        for idx, result in enumerate(tqdm(results, desc="Applying DIPPER attacks", leave=False)):
-            attacked_result = self.process_sample(result, idx)
+        try:
+            for idx, result in enumerate(tqdm(results, desc="Applying DIPPER attacks", leave=False)):
+                attacked_result = self.process_sample(result, idx)
 
-            # Update statistics
-            if 'attack_metadata' in attacked_result and 'error' not in attacked_result['attack_metadata']:
-                metadata = attacked_result['attack_metadata']
-                stats['successful_attacks'] += 1
-                stats['original_lengths'].append(metadata['original_length'])
-                stats['attacked_lengths'].append(metadata['attacked_length'])
-                stats['length_changes'].append(metadata['length_change'])
-            else:
-                stats['failed_attacks'] += 1
+                # Update statistics
+                if 'attack_metadata' in attacked_result and 'error' not in attacked_result['attack_metadata']:
+                    metadata = attacked_result['attack_metadata']
+                    stats['successful_attacks'] += 1
+                    stats['original_lengths'].append(metadata['original_length'])
+                    stats['attacked_lengths'].append(metadata['attacked_length'])
+                    stats['length_changes'].append(metadata['length_change'])
+                else:
+                    stats['failed_attacks'] += 1
 
-            attacked_results.append(attacked_result)
+                attacked_results.append(attacked_result)
+
+        except KeyboardInterrupt:
+            print(f"\n\nInterrupted! Saving {len(attacked_results)} processed samples...")
+            # Save partial results with a marker
+            self._save_partial_results(output_file, attacked_results, stats, len(results))
+            raise
 
         # Save results
         with open(output_file, 'w') as f:
             json.dump(attacked_results, f, indent=4)
 
         return stats
+
+    def _save_partial_results(self, output_file: str, attacked_results: List[dict],
+                              stats: Dict[str, Any], total_expected: int):
+        """Save partial results when interrupted."""
+        # Add .partial suffix before .json
+        if output_file.endswith('.json'):
+            partial_file = output_file[:-5] + '.partial.json'
+        else:
+            partial_file = output_file + '.partial'
+
+        # Add metadata about interruption
+        partial_data = {
+            '_partial_results_metadata': {
+                'interrupted': True,
+                'processed_count': len(attacked_results),
+                'total_expected': total_expected,
+                'timestamp': datetime.now().isoformat(),
+                'statistics': {
+                    'successful_attacks': stats['successful_attacks'],
+                    'failed_attacks': stats['failed_attacks']
+                }
+            },
+            'results': attacked_results
+        }
+
+        with open(partial_file, 'w') as f:
+            json.dump(partial_data, f, indent=4)
+
+        print(f"Partial results saved to: {partial_file}")
+        print(f"Processed {len(attacked_results)}/{total_expected} samples")
 
     def process_directory(self, input_dir: str, output_dir: str = None) -> None:
         """Process all JSON files in a directory."""

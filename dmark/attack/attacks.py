@@ -27,6 +27,7 @@ class AttackConfig:
 
     # API settings for paraphrase
     api_provider: str = "openai"  # "openai" or "gemini"
+    api_base: Optional[str] = None  
     api_key: Optional[str] = None
     api_model: str = "gpt-3.5-turbo"  # Or "gemini-pro" for Gemini
     temperature: float = 0.7
@@ -217,7 +218,10 @@ class ParaphraseAttack(BaseAttack):
             raise ImportError("openai package not installed. Install with: pip install openai")
 
         # Initialize OpenAI client
-        client = OpenAI(api_key=self.config.api_key)
+        if self.config.api_base is None:
+            client = OpenAI(api_key=self.config.api_key)
+        else:
+            client = OpenAI(api_key=self.config.api_key, api_base=self.config.api_base)
 
         # Create paraphrasing prompt
         prompt = f"""Please paraphrase the following text while preserving its meaning. Output only the rewritten text, nothing else:
@@ -227,14 +231,23 @@ class ParaphraseAttack(BaseAttack):
         # Try to get paraphrase with retries
         for attempt in range(self.config.max_retries):
             try:
-                response = client.responses.create(
-                    model=self.config.api_model,
-                    input=[
-                        {"role": "system", "content": "You are a paraphrasing assistant. Output only the paraphrased text without any additional comments, explanations, or formatting."},
-                        {"role": "user", "content": prompt},
-                    ],
-                    temperature=self.config.temperature,
-                )
+                if self.config.api_model.startswith("gpt"):
+                    response = client.responses.create(
+                        model=self.config.api_model,
+                        input=[
+                            {"role": "system", "content": "You are a paraphrasing assistant. Output only the paraphrased text without any additional comments, explanations, or formatting."},
+                            {"role": "user", "content": prompt},
+                        ],
+                        temperature=self.config.temperature,
+                    )
+                else: 
+                    response = client.chat.completions.create(
+                        model=self.config.api_model,
+                        messages=[
+                            {"role": "system", "content": "You are a paraphrasing assistant. Output only the paraphrased text without any additional comments, explanations, or formatting."},
+                            {"role": "user", "content": prompt},
+                        ]
+                    )
 
                 paraphrased_text = response.output_text
                 paraphrased_ids = self.tokenizer.encode(paraphrased_text, add_special_tokens=False)
@@ -830,6 +843,13 @@ def main():
         type=str,
         default="gpt-3.5-turbo",
         help="Model to use for paraphrase attack (default: gpt-3.5-turbo for OpenAI, gemini-pro for Gemini)"
+    )
+
+    parser.add_argument(
+        "--api-base",
+        type=str,
+        default=None,
+        help="API base for paraphrase attack (default: None)"
     )
 
     parser.add_argument(

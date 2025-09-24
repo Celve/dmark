@@ -423,7 +423,7 @@ class DreamGenerationMixin:
                     x,
                     mask_token_id,
                     logits,
-                    attention_mask.shape[1],
+                    input_ids.shape[1],
                     max_length,
                 )
 

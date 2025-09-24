@@ -55,7 +55,7 @@ def parse_args():
     parser.add_argument("--output_dir", type=str, default=None)
 
     # then we add DREAM generation arguments
-    parser.add_argument("--steps", type=int, default=512)
+    parser.add_argument("--steps", type=int, default=256)
     parser.add_argument("--gen_length", type=int, default=256)
     parser.add_argument("--temperature", type=float, default=0.2)
     parser.add_argument("--alg", type=str, default="entropy", choices=["origin", "maskgit_plus", "topk_margin", "entropy"])
@@ -68,7 +68,7 @@ def parse_args():
 
     # now it's time to add watermark arguments 
     # even though many of them have default values, the watermark will only be enabled if the strategy is not None
-    parser.add_argument("--strategy", type=str, default=None, choices=["normal", "predict", "bidirectional"])
+    parser.add_argument("--strategy", type=str, default=None, choices=["normal", "predict", "bidirectional", "predict-bidirectional"])
     parser.add_argument("--bitmap", type=str, default="bitmap.bin")
     parser.add_argument("--bitmap_device", type=str, default="cuda", choices=["cpu", "cuda"], help="Device to store the bitmap on")
     parser.add_argument("--vocab_size", type=int, default=152064)

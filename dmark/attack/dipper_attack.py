@@ -281,7 +281,7 @@ class DipperAttackProcessor:
         if output_dir is None:
             base_dir = os.path.dirname(input_dir.rstrip('/'))
             dir_name = os.path.basename(input_dir.rstrip('/'))
-            output_dir = os.path.join(base_dir, f"{dir_name}_dipper")
+            output_dir = os.path.join(base_dir, f"{dir_name}_dipper_lex{self.lex_diversity}_ord{self.order_diversity}")
 
         # Create output directory
         os.makedirs(output_dir, exist_ok=True)
@@ -313,9 +313,9 @@ class DipperAttackProcessor:
         for json_file in tqdm(json_files, desc="Processing files"):
             input_path = os.path.join(input_dir, json_file)
 
-            # Add suffix to filename
+            # Add suffix to filename with diversity parameters
             base_name = json_file[:-5] if json_file.endswith('.json') else json_file
-            output_filename = f"{base_name}_dipper.json"
+            output_filename = f"{base_name}_dipper_lex{self.lex_diversity}_ord{self.order_diversity}.json"
             output_path = os.path.join(output_dir, output_filename)
 
             try:
@@ -545,7 +545,7 @@ def main():
         if args.output is None:
             dir_path = os.path.dirname(args.input)
             base_name = os.path.splitext(os.path.basename(args.input))[0]
-            output_file = os.path.join(dir_path, f"{base_name}_dipper.json")
+            output_file = os.path.join(dir_path, f"{base_name}_dipper_lex{args.lex_diversity}_ord{args.order_diversity}.json")
         else:
             output_file = args.output
 

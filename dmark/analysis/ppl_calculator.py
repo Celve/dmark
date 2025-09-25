@@ -7,6 +7,48 @@ import numpy as np
 from tqdm import tqdm
 
 
+def normalize_model_name(model_path: str) -> str:
+    """
+    Normalize model name to last two path components.
+
+    Args:
+        model_path: Full or partial model path
+
+    Returns:
+        Normalized model name (e.g., 'GSAI-ML/LLaDA-8B-Instruct')
+    """
+    if not model_path:
+        return model_path
+
+    # Split by '/' and get last two parts
+    parts = model_path.split('/')
+    if len(parts) >= 2:
+        return '/'.join(parts[-2:])
+    return model_path
+
+
+def normalize_dataset_name(dataset_path: str) -> str:
+    """
+    Normalize dataset name to last two path components.
+
+    Args:
+        dataset_path: Full or partial dataset path
+
+    Returns:
+        Normalized dataset name (e.g., 'sentence-transformers/eli5')
+    """
+    if not dataset_path:
+        return dataset_path
+
+    # Split by '/' and get last two parts
+    parts = dataset_path.split('/')
+    if len(parts) >= 2:
+        return '/'.join(parts[-2:])
+    elif parts[0] == 'gsm8k':
+        return 'openai/gsm8k'
+    return dataset_path
+
+
 def extract_metadata_from_results(results: List[Dict]) -> Dict[str, Optional[str]]:
     """
     Extract metadata from the first instance in results.
@@ -42,8 +84,11 @@ def extract_metadata_from_results(results: List[Dict]) -> Dict[str, Optional[str
         # Check generation metadata
         if 'generation_metadata' in result:
             gen_meta = result['generation_metadata']
-            metadata['model'] = gen_meta.get('model')
-            metadata['dataset'] = gen_meta.get('dataset')
+            # Normalize model and dataset names
+            model = gen_meta.get('model')
+            metadata['model'] = normalize_model_name(model) if model else None
+            dataset = gen_meta.get('dataset')
+            metadata['dataset'] = normalize_dataset_name(dataset) if dataset else None
             metadata['steps'] = gen_meta.get('steps')
             metadata['gen_length'] = gen_meta.get('gen_length')
             metadata['block_length'] = gen_meta.get('block_length')

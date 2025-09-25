@@ -127,7 +127,12 @@ def main():
         choices=["cuda", "cpu"],
         help="Device to run model on (default: cuda)"
     )
-    
+    parser.add_argument(
+        "--increment",
+        action="store_true",
+        help="Increment mode: only process files that don't have output yet"
+    )
+
     args = parser.parse_args()
     
     # Check if input exists
@@ -171,20 +176,42 @@ def main():
         
         # Process all JSON files in directory (excluding already tagged files and metadata files)
         tag_suffix = f"_{args.tag}.json"
-        json_files = [f for f in os.listdir(args.input) 
+        json_files = [f for f in os.listdir(args.input)
                      if f.endswith('.json') and not f.endswith(tag_suffix) and not f.startswith('_')]
-        
+
         if not json_files:
             print(f"No JSON files found in directory: {args.input}")
             return
-        
-        print(f"Found {len(json_files)} JSON files to process")
-        print(f"Output directory: {output_dir}")
-        
-        successful = 0
-        failed = 0
+
+        # Filter files based on increment mode
+        files_to_process = []
+        files_skipped_existing = []
 
         for json_file in json_files:
+            output_name = json_file.replace(".json", f"_{args.tag}.json")
+            output_path = os.path.join(output_dir, output_name)
+
+            if args.increment and os.path.exists(output_path):
+                files_skipped_existing.append(json_file)
+            else:
+                files_to_process.append(json_file)
+
+        print(f"📁 Directory: {args.input}")
+        print(f"📊 Total JSON files found: {len(json_files)}")
+        if args.increment and files_skipped_existing:
+            print(f"⏭️  Already processed (will skip): {len(files_skipped_existing)}")
+        print(f"🔄 Files to process: {len(files_to_process)}")
+        print(f"📂 Output directory: {output_dir}")
+
+        if not files_to_process:
+            print("No new files to process")
+            return
+
+        successful = 0
+        failed = 0
+        skipped = len(files_skipped_existing)
+
+        for json_file in files_to_process:
             input_path = os.path.join(args.input, json_file)
             output_name = json_file.replace(".json", f"_{args.tag}.json")
             output_path = os.path.join(output_dir, output_name)
@@ -201,6 +228,8 @@ def main():
         print(f"  ✅ Successfully processed: {successful} files")
         if failed > 0:
             print(f"  ❌ Failed/Skipped: {failed} files")
+        if args.increment and skipped > 0:
+            print(f"  ⏭️  Already processed: {skipped} files")
             
     elif os.path.isfile(args.input):
         # Input is a file
@@ -212,7 +241,12 @@ def main():
         else:
             # Save alongside input file with tag
             output_file = args.input.replace(".json", f"_{args.tag}.json")
-        
+
+        # Check if output exists in increment mode
+        if args.increment and os.path.exists(output_file):
+            print(f"⏭️  Skipping (output exists): {output_file}")
+            return
+
         if not process_json_file(args.input, output_file, ppl_calculator):
             print(f"❌ Failed to process file")
     else:

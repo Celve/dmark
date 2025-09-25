@@ -135,6 +135,19 @@ def extract_attack_config(results: List[Dict]) -> Dict[str, any]:
             config['api_model'] = attack_meta.get('api_model')
             config['temperature'] = attack_meta.get('temperature')
 
+        # Add DIPPER-specific fields if present
+        elif attack_meta.get('type') == 'dipper_paraphrase':
+            # Extract from paraphrase_params
+            paraphrase_params = attack_meta.get('paraphrase_params', {})
+            config['lex_diversity'] = paraphrase_params.get('lex_diversity')
+            config['order_diversity'] = paraphrase_params.get('order_diversity')
+            config['sent_interval'] = paraphrase_params.get('sent_interval')
+            config['dipper_model'] = paraphrase_params.get('dipper_model')
+            config['max_length'] = paraphrase_params.get('max_length')
+            config['top_p'] = paraphrase_params.get('top_p')
+            config['top_k'] = paraphrase_params.get('top_k')
+            config['do_sample'] = paraphrase_params.get('do_sample')
+
         return config
 
     return {}
@@ -417,7 +430,11 @@ def save_results(
         headers.extend([
             'attack_type', 'attack_ratio', 'attack_seed', 'attack_source_field',
             'attack_truncation_applied', 'attack_min_output_length',
-            'attack_api_provider', 'attack_api_model', 'attack_temperature'
+            # API-based paraphrase fields
+            'attack_api_provider', 'attack_api_model', 'attack_temperature',
+            # DIPPER-specific fields
+            'dipper_lex_diversity', 'dipper_order_diversity', 'dipper_sent_interval',
+            'dipper_model', 'dipper_max_length', 'dipper_top_p', 'dipper_top_k', 'dipper_do_sample'
         ])
 
     # Add statistics headers
@@ -475,7 +492,16 @@ def save_results(
                     'attack_min_output_length': attack_cfg.get('pre_attack_truncation', {}).get('min_output_length') if attack_cfg.get('pre_attack_truncation') else None,
                     'attack_api_provider': attack_cfg.get('api_provider'),
                     'attack_api_model': attack_cfg.get('api_model'),
-                    'attack_temperature': attack_cfg.get('temperature')
+                    'attack_temperature': attack_cfg.get('temperature'),
+                    # DIPPER-specific fields
+                    'dipper_lex_diversity': attack_cfg.get('lex_diversity'),
+                    'dipper_order_diversity': attack_cfg.get('order_diversity'),
+                    'dipper_sent_interval': attack_cfg.get('sent_interval'),
+                    'dipper_model': attack_cfg.get('dipper_model'),
+                    'dipper_max_length': attack_cfg.get('max_length'),
+                    'dipper_top_p': attack_cfg.get('top_p'),
+                    'dipper_top_k': attack_cfg.get('top_k'),
+                    'dipper_do_sample': attack_cfg.get('do_sample')
                 })
             elif extract_attack:
                 # Fill with None if no attack config found
@@ -488,7 +514,16 @@ def save_results(
                     'attack_min_output_length': None,
                     'attack_api_provider': None,
                     'attack_api_model': None,
-                    'attack_temperature': None
+                    'attack_temperature': None,
+                    # DIPPER-specific fields
+                    'dipper_lex_diversity': None,
+                    'dipper_order_diversity': None,
+                    'dipper_sent_interval': None,
+                    'dipper_model': None,
+                    'dipper_max_length': None,
+                    'dipper_top_p': None,
+                    'dipper_top_k': None,
+                    'dipper_do_sample': None
                 })
 
             # Add statistics
@@ -707,18 +742,33 @@ def main():
         for result in all_results:
             if 'attack_config' in result and result['attack_config']:
                 attack_cfg = result['attack_config']
-                attack_key = (
-                    attack_cfg.get('type'),
-                    attack_cfg.get('ratio'),
-                    attack_cfg.get('seed')
-                )
+                # Include DIPPER-specific parameters in the key if present
+                if attack_cfg.get('type') == 'dipper_paraphrase':
+                    attack_key = (
+                        attack_cfg.get('type'),
+                        attack_cfg.get('lex_diversity'),
+                        attack_cfg.get('order_diversity'),
+                        attack_cfg.get('sent_interval')
+                    )
+                else:
+                    attack_key = (
+                        attack_cfg.get('type'),
+                        attack_cfg.get('ratio'),
+                        attack_cfg.get('seed'),
+                        None  # placeholder to keep tuple length consistent
+                    )
                 if attack_key not in attack_groups:
                     attack_groups[attack_key] = []
                 attack_groups[attack_key].append(result)
 
         if attack_groups:
-            for (attack_type, attack_ratio, attack_seed), group_results in attack_groups.items():
-                print(f"\n  Attack Type={attack_type}, Ratio={attack_ratio}, Seed={attack_seed}:")
+            for attack_key, group_results in attack_groups.items():
+                if attack_key[0] == 'dipper_paraphrase':
+                    attack_type, lex_div, order_div, sent_int = attack_key
+                    print(f"\n  Attack Type={attack_type}, Lex={lex_div}, Order={order_div}, SentInterval={sent_int}:")
+                else:
+                    attack_type, attack_ratio, attack_seed, _ = attack_key
+                    print(f"\n  Attack Type={attack_type}, Ratio={attack_ratio}, Seed={attack_seed}:")
                 print(f"    Files: {len(group_results)}")
 
                 # Calculate average TPR for this attack configuration

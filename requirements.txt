@@ -1,0 +1,10 @@
+aiohttp==3.13.2
+datasets==4.4.1
+hf_transfer==0.1.9
+omegaconf==2.3.0
+pydantic==2.5.0
+sacrebleu==2.4.0
+scipy==1.11.4
+torch==2.8.0
+transformers==4.49.0
+wheel==0.45.1

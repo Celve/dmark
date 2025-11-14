@@ -10,8 +10,13 @@ from transformers import AutoModel, AutoTokenizer
 from dmark.dataset.c4 import C4Dataset
 from dmark.dataset.eli5 import ELI5Dataset
 from dmark.dataset.gsm8k import GSM8KDataset
-from dmark.gen.utils import ExprConfig, GenConfig, generate_result_filename, parse_args
-from dmark.gen.llada import generate
+from dmark.gen.utils import (
+    DreamExprConfig,
+    DreamGenConfig,
+    generate_dream_result_filename,
+    parse_dream_args,
+)
+from dmark.llada.gen_dream import DreamGenerationMixin
 from dmark.watermark.config import WatermarkConfig
 from dmark.watermark.persistent_bitmap import PersistentBitmap
 from dmark.watermark.watermark import Watermark
@@ -19,7 +24,7 @@ from dmark.watermark.watermark import Watermark
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def _build_dataset(gen_config: GenConfig, tokenizer) -> Any:
+def _build_dataset(gen_config: DreamGenConfig, tokenizer) -> Any:
     dataset_name = gen_config.dataset.lower()
     if dataset_name == "allenai/c4":
         return C4Dataset(
@@ -61,9 +66,9 @@ def _prepare_tokenizer(model_name: str):
             tokenizer.eos_token or tokenizer.unk_token or tokenizer.bos_token
         )
     if tokenizer.pad_token is None:
-        raise ValueError("Tokenizer must define a pad token for batch inference.")
+        raise ValueError("Tokenizer must provide a pad token for batch inference.")
     if tokenizer.pad_token_id == 126336:
-        raise ValueError("Tokenizer pad token id conflicts with LLaDA mask id (126336).")
+        raise ValueError("Tokenizer pad token matches mask id 126336.")
     return tokenizer
 
 
@@ -81,13 +86,15 @@ def _tensor_to_1d_cpu(tensor: torch.Tensor) -> torch.Tensor:
     return tensor.to(torch.long).cpu().contiguous()
 
 
+
 def run_generation(
-    gen_config: GenConfig,
+    gen_config: DreamGenConfig,
     watermark_config: WatermarkConfig,
-    expr_config: ExprConfig,
+    expr_config: DreamExprConfig,
 ) -> list[dict[str, Any]]:
     tokenizer = _prepare_tokenizer(gen_config.model)
     dataset = _build_dataset(gen_config, tokenizer)
+    stop_token_ids = tokenizer.eos_token_id
 
     watermark: Watermark | None = None
     if watermark_config.strategy is not None:
@@ -107,6 +114,37 @@ def run_generation(
         .to(DEVICE)
         .eval()
     )
+
+    if watermark is not None:
+        model.diffusion_generate = DreamGenerationMixin.diffusion_generate.__get__(
+            model, model.__class__
+        )
+        model._sample = DreamGenerationMixin._sample.__get__(model, model.__class__)
+        model._prepare_generation_config = (
+            DreamGenerationMixin._prepare_generation_config.__get__(
+                model, model.__class__
+            )
+        )
+        model._prepare_special_tokens = (
+            DreamGenerationMixin._prepare_special_tokens.__get__(
+                model, model.__class__
+            )
+        )
+        model._prepare_generated_length = (
+            DreamGenerationMixin._prepare_generated_length.__get__(
+                model, model.__class__
+            )
+        )
+        model._validate_generated_length = (
+            DreamGenerationMixin._validate_generated_length.__get__(
+                model, model.__class__
+            )
+        )
+        model._expand_inputs_for_generation = (
+            DreamGenerationMixin._expand_inputs_for_generation.__get__(
+                model, model.__class__
+            )
+        )
 
     batch_size = max(1, expr_config.batch_size)
     results: list[dict[str, Any]] = []
@@ -153,7 +191,7 @@ def run_generation(
     def trim_special_tokens(output_ids: torch.Tensor) -> torch.Tensor:
         trimmed_length = output_ids.shape[0]
         for i, curr_token in enumerate(output_ids):
-            if curr_token.item() in (126081, 126348):
+            if curr_token.item() in stop_token_ids:
                 trimmed_length = i
                 break
         return output_ids[:trimmed_length]
@@ -196,7 +234,6 @@ def run_generation(
         output_text = (
             tokenizer.decode(output_list, skip_special_tokens=True) if output_list else ""
         )
-
         results.append(
             {
                 "data": {
@@ -215,6 +252,22 @@ def run_generation(
         )
         pbar.update(1)
 
+    generation_kwargs = {
+        "max_new_tokens": gen_config.gen_length,
+        "output_history": gen_config.output_history,
+        "return_dict_in_generate": gen_config.return_dict_in_generate,
+        "steps": gen_config.steps,
+        "temperature": gen_config.temperature,
+        "top_p": gen_config.top_p,
+        "alg": gen_config.alg,
+        "alg_temp": gen_config.alg_temp,
+        "eps": gen_config.eps,
+    }
+    if gen_config.top_k is not None:
+        generation_kwargs["top_k"] = gen_config.top_k
+    if watermark is not None:
+        generation_kwargs["watermark"] = watermark
+
     try:
         while len(results) < expr_config.num_samples:
             remaining = expr_config.num_samples - len(results)
@@ -231,19 +284,16 @@ def run_generation(
                 break
 
             batch_input_ids, batch_attention_mask = collate_batch(batch_samples)
-            out = generate(
-                model,
+            output = model.diffusion_generate(
                 batch_input_ids,
                 attention_mask=batch_attention_mask,
-                steps=gen_config.steps,
-                gen_length=gen_config.gen_length,
-                block_length=gen_config.block_length,
-                temperature=gen_config.temperature,
-                cfg_scale=gen_config.cfg_scale,
-                remasking=gen_config.remasking,
-                watermark=watermark,
+                **generation_kwargs,
             )
-            generated_segment = out[:, batch_input_ids.shape[1] :]
+            generated_segment = (
+                output.sequences[:, batch_input_ids.shape[1] :]
+                if gen_config.return_dict_in_generate
+                else output[:, batch_input_ids.shape[1] :]
+            )
             for idx, sample in enumerate(batch_samples):
                 process_sample(sample, generated_segment[idx])
 
@@ -270,22 +320,23 @@ def run_generation(
 
     return results
 
+
 if __name__ == "__main__":
-    gen_config, watermark_config, expr_config = parse_args()
+    gen_config, watermark_config, expr_config = parse_dream_args()
     results = run_generation(gen_config, watermark_config, expr_config)
-    
-    # Save results if any were collected
+
     if results:
         if expr_config.output_dir is not None:
             os.makedirs(expr_config.output_dir, exist_ok=True)
-            output_filename = generate_result_filename(gen_config, watermark_config, expr_config)
+            output_filename = generate_dream_result_filename(
+                gen_config, watermark_config, expr_config
+            )
             output_filename = os.path.join(expr_config.output_dir, output_filename)
-            # Save results to file
             with open(output_filename, "w") as f:
                 json.dump(results, f, indent=4)
             print(f"Results saved to: {output_filename}")
             print(f"Total samples collected: {len(results)}")
-        else: 
+        else:
             print(results)
     else:
         print("No results were collected.")

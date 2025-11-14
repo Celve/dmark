@@ -1,9 +1,11 @@
-
 import argparse
-from pydantic import BaseModel
+import datetime
 from typing import Optional
 
+from pydantic import BaseModel
+
 from dmark.watermark.config import WatermarkConfig
+
 
 class GenConfig(BaseModel):
     model: str
@@ -15,6 +17,7 @@ class GenConfig(BaseModel):
     cfg_scale: float = 0.0
     remasking: str = "low_confidence"
 
+
 class ExprConfig(BaseModel):
     num_samples: int
     output_dir: Optional[str]
@@ -24,11 +27,33 @@ class ExprConfig(BaseModel):
     bitmap_device: str = "cpu"
 
 
+class DreamGenConfig(BaseModel):
+    model: str
+    dataset: str
+    steps: int = 256
+    gen_length: int = 256
+    temperature: float = 0.2
+    alg: str = "entropy"
+    alg_temp: float = 0.0
+    eps: float = 1e-3
+    top_p: float = 0.95
+    top_k: Optional[int] = None
+    output_history: bool = False
+    return_dict_in_generate: bool = True
 
-def parse_args(): 
+
+class DreamExprConfig(BaseModel):
+    num_samples: int
+    output_dir: Optional[str]
+    minimum_output_token: Optional[int]
+    repeat_ratio: float = 0.2
+    batch_size: int = 1
+    bitmap_device: str = "cuda"
+
+
+def parse_args():
     parser = argparse.ArgumentParser()
 
-    # we starts with dataset and model
     parser.add_argument("--dataset", type=str, required=True)
     parser.add_argument(
         "--model",
@@ -37,33 +62,57 @@ def parse_args():
         help="Model name or path",
     )
 
-    # then we add number of samples and output directory
     parser.add_argument("--num_samples", type=int, default=100)
-    parser.add_argument("--batch_size", type=int, default=1, help="Number of prompts to generate per forward pass")
+    parser.add_argument(
+        "--batch_size", type=int, default=1, help="Prompts per forward pass"
+    )
     parser.add_argument("--minimum_output_token", type=int, default=None)
-    parser.add_argument("--repeat_ratio", type=float, default=0.2, 
-                       help="Maximum ratio of any single token repetition (default: 0.2)")
+    parser.add_argument(
+        "--repeat_ratio",
+        type=float,
+        default=0.2,
+        help="Maximum ratio of any single token repetition (default: 0.2)",
+    )
     parser.add_argument("--output_dir", type=str, default=None)
 
-    # then we add generation arguments
     parser.add_argument("--steps", type=int, default=256)
     parser.add_argument("--gen_length", type=int, default=256)
     parser.add_argument("--block_length", type=int, default=32)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--cfg_scale", type=float, default=0.0)
-    parser.add_argument("--remasking", type=str, default="low_confidence", choices=["low_confidence", "random", "right_to_left", "left_to_right"])
+    parser.add_argument(
+        "--remasking",
+        type=str,
+        default="low_confidence",
+        choices=["low_confidence", "random", "right_to_left", "left_to_right"],
+    )
 
-    # now it's time to add watermark arguments 
-    # even though many of them have default values, the watermark will only be enabled if the strategy is not None
-    parser.add_argument("--strategy", type=str, default=None, choices=["normal", "predict", "bidirectional", "predict-bidirectional", "legacy-ahead", "legacy-both"])
+    parser.add_argument(
+        "--strategy",
+        type=str,
+        default=None,
+        choices=[
+            "normal",
+            "predict",
+            "bidirectional",
+            "predict-bidirectional",
+            "legacy-ahead",
+            "legacy-both",
+        ],
+    )
     parser.add_argument("--bitmap", type=str, default="bitmap.bin")
-    parser.add_argument("--bitmap_device", type=str, default="cuda", choices=["cpu", "cuda"], help="Device to store the bitmap on")
+    parser.add_argument(
+        "--bitmap_device",
+        type=str,
+        default="cuda",
+        choices=["cpu", "cuda"],
+        help="Device to store the bitmap on",
+    )
     parser.add_argument("--vocab_size", type=int, default=126464)
     parser.add_argument("--ratio", type=float, default=0.5)
     parser.add_argument("--delta", type=float, default=2.0)
     parser.add_argument("--key", type=int, default=42)
     parser.add_argument("--prebias", type=bool, default=False)
-
 
     args = parser.parse_args()
 
@@ -85,7 +134,7 @@ def parse_args():
         key=args.key,
         prebias=args.prebias,
         strategy=args.strategy,
-        bitmap_path=args.bitmap
+        bitmap_path=args.bitmap,
     )
 
     expr_config = ExprConfig(
@@ -99,66 +148,198 @@ def parse_args():
 
     return gen_config, watermark_config, expr_config
 
+
+def parse_dream_args():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--dataset", type=str, required=True)
+    parser.add_argument(
+        "--model",
+        type=str,
+        default="Dream-org/Dream-v0-Instruct-7B",
+        help="Dream model name or path",
+    )
+
+    parser.add_argument("--num_samples", type=int, default=100)
+    parser.add_argument("--batch_size", type=int, default=1, help="Prompts per batch")
+    parser.add_argument("--minimum_output_token", type=int, default=None)
+    parser.add_argument(
+        "--repeat_ratio",
+        type=float,
+        default=0.2,
+        help="Maximum ratio of any single token repetition (default: 0.2)",
+    )
+    parser.add_argument("--output_dir", type=str, default=None)
+
+    parser.add_argument("--steps", type=int, default=256)
+    parser.add_argument("--gen_length", type=int, default=256)
+    parser.add_argument("--temperature", type=float, default=0.2)
+    parser.add_argument(
+        "--alg",
+        type=str,
+        default="entropy",
+        choices=["origin", "maskgit_plus", "topk_margin", "entropy"],
+    )
+    parser.add_argument("--alg_temp", type=float, default=0.0)
+    parser.add_argument("--eps", type=float, default=1e-3)
+    parser.add_argument("--top_p", type=float, default=0.95)
+    parser.add_argument("--top_k", type=int, default=None)
+    parser.add_argument(
+        "--output_history",
+        action="store_true",
+        help="Return the diffusion history from DREAM",
+    )
+    return_dict_group = parser.add_mutually_exclusive_group()
+    return_dict_group.add_argument(
+        "--return_dict_in_generate",
+        action="store_true",
+        dest="return_dict_in_generate",
+        help="Return DreamModelOutput from diffusion_generate",
+    )
+    return_dict_group.add_argument(
+        "--no-return_dict_in_generate",
+        action="store_false",
+        dest="return_dict_in_generate",
+        help="Return tensor output only",
+    )
+    parser.set_defaults(return_dict_in_generate=True)
+
+    parser.add_argument(
+        "--strategy",
+        type=str,
+        default=None,
+        choices=["normal", "predict", "bidirectional", "predict-bidirectional"],
+    )
+    parser.add_argument("--bitmap", type=str, default="bitmap.bin")
+    parser.add_argument(
+        "--bitmap_device",
+        type=str,
+        default="cuda",
+        choices=["cpu", "cuda"],
+        help="Device to store the bitmap on",
+    )
+    parser.add_argument("--vocab_size", type=int, default=152064)
+    parser.add_argument("--ratio", type=float, default=0.5)
+    parser.add_argument("--delta", type=float, default=2.0)
+    parser.add_argument("--key", type=int, default=42)
+    parser.add_argument("--prebias", type=bool, default=False)
+
+    args = parser.parse_args()
+
+    gen_config = DreamGenConfig(
+        model=args.model,
+        dataset=args.dataset,
+        steps=args.steps,
+        gen_length=args.gen_length,
+        temperature=args.temperature,
+        alg=args.alg,
+        alg_temp=args.alg_temp,
+        eps=args.eps,
+        top_p=args.top_p,
+        top_k=args.top_k,
+        output_history=args.output_history,
+        return_dict_in_generate=args.return_dict_in_generate,
+    )
+
+    watermark_config = WatermarkConfig(
+        vocab_size=args.vocab_size,
+        ratio=args.ratio,
+        delta=args.delta,
+        key=args.key,
+        prebias=args.prebias,
+        strategy=args.strategy,
+        bitmap_path=args.bitmap,
+    )
+
+    expr_config = DreamExprConfig(
+        num_samples=args.num_samples,
+        output_dir=args.output_dir,
+        minimum_output_token=args.minimum_output_token,
+        repeat_ratio=args.repeat_ratio,
+        batch_size=args.batch_size,
+        bitmap_device=args.bitmap_device,
+    )
+
+    return gen_config, watermark_config, expr_config
+
+
+def _finalize_filename_components(
+    base_components: list[str],
+    watermark_config: WatermarkConfig,
+    expr_config: BaseModel,
+    vocab_default: int,
+) -> str:
+    components = list(base_components)
+    if watermark_config.strategy is not None:
+        components.append("wm")
+        components.extend(
+            [
+                f"r{watermark_config.ratio}",
+                f"d{watermark_config.delta}",
+                f"k{watermark_config.key}",
+                watermark_config.strategy,
+            ]
+        )
+        if getattr(watermark_config, "prebias", False):
+            components.append("prebias")
+        if watermark_config.vocab_size != vocab_default:
+            components.append(f"v{watermark_config.vocab_size}")
+    else:
+        components.append("nowm")
+
+    num_samples = getattr(expr_config, "num_samples", None)
+    if num_samples is not None:
+        components.append(f"n{num_samples}")
+    minimum_output_token = getattr(expr_config, "minimum_output_token", None)
+    if minimum_output_token is not None:
+        components.append(f"min{minimum_output_token}")
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    components.append(timestamp)
+    return "-".join(components) + ".json"
+
+
 def generate_result_filename(
     gen_config: GenConfig,
     watermark_config: WatermarkConfig,
     expr_config: ExprConfig,
 ) -> str:
-    """Generate a comprehensive result filename based on all configuration parameters."""
-    import datetime
-    
-    # Extract model name (last part after /)
-    model_name = gen_config.model.split('/')[-1]
-    
-    # Start with base components
-    components = [
+    model_name = gen_config.model.split("/")[-1]
+    base = [
         "results",
-        gen_config.dataset.replace('/', '_'),
+        gen_config.dataset.replace("/", "_"),
         model_name,
-    ]
-    
-    # Add generation parameters
-    components.extend([
         f"steps{gen_config.steps}",
         f"len{gen_config.gen_length}",
         f"blk{gen_config.block_length}",
         f"temp{gen_config.temperature}",
         f"cfg{gen_config.cfg_scale}",
         f"mask_{gen_config.remasking}",
-    ])
-    
-    # Add watermark parameters if enabled
-    if watermark_config.strategy is not None:
-        components.append("wm")
-        components.extend([
-            f"r{watermark_config.ratio}",
-            f"d{watermark_config.delta}",
-            f"k{watermark_config.key}",
-            watermark_config.strategy,
-        ])
-        
-        # Add prebias if enabled
-        if watermark_config.prebias:
-            components.append("prebias")
-        
-        # Add vocab size if not default
-        if watermark_config.vocab_size != 126464:
-            components.append(f"v{watermark_config.vocab_size}")
-    else:
-        components.append("nowm")
-    
-    # Add number of samples
-    components.append(f"n{expr_config.num_samples}")
-    
-    # Add minimum output token if specified
-    if expr_config.minimum_output_token is not None:
-        components.append(f"min{expr_config.minimum_output_token}")
-    
-    # Add timestamp for uniqueness
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    components.append(timestamp)
-    
-    # Join with underscores and add extension
-    filename = "-".join(components) + ".json"
-    
-    return filename
+    ]
+    return _finalize_filename_components(base, watermark_config, expr_config, 126464)
+
+
+def generate_dream_result_filename(
+    gen_config: DreamGenConfig,
+    watermark_config: WatermarkConfig,
+    expr_config: DreamExprConfig,
+) -> str:
+    model_name = gen_config.model.split("/")[-1]
+    base = [
+        "results",
+        gen_config.dataset.replace("/", "_"),
+        model_name,
+        "dream",
+        f"steps{gen_config.steps}",
+        f"len{gen_config.gen_length}",
+        f"temp{gen_config.temperature}",
+        f"alg_{gen_config.alg}",
+        f"alg_temp{gen_config.alg_temp}",
+    ]
+    if gen_config.eps != 1e-3:
+        base.append(f"eps{gen_config.eps}")
+    if gen_config.top_p != 0.95:
+        base.append(f"top_p{gen_config.top_p}")
+    if gen_config.top_k is not None:
+        base.append(f"top_k{gen_config.top_k}")
+    return _finalize_filename_components(base, watermark_config, expr_config, 152064)

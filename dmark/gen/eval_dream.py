@@ -94,7 +94,7 @@ def run_generation(
 ) -> list[dict[str, Any]]:
     tokenizer = _prepare_tokenizer(gen_config.model)
     dataset = _build_dataset(gen_config, tokenizer)
-    stop_token_ids = tokenizer.eos_token_id
+    stop_token_ids = [tokenizer.eos_token_id]
 
     watermark: Watermark | None = None
     if watermark_config.strategy is not None:

@@ -113,6 +113,8 @@ def run_generation(
     dataset_index = 0
     dataset_exhausted = False
     pbar = tqdm.tqdm(total=expr_config.num_samples, desc="Collecting valid samples")
+    skipped_min_tokens = 0
+    skipped_repetition = 0
 
     def fetch_next_sample():
         nonlocal dataset_index
@@ -157,6 +159,7 @@ def run_generation(
         return output_ids[:trimmed_length]
 
     def process_sample(sample, output_ids_tensor):
+        nonlocal skipped_min_tokens, skipped_repetition
         output_ids = trim_special_tokens(output_ids_tensor.detach().cpu())
         num_output_tokens = int(output_ids.shape[0])
 
@@ -164,6 +167,7 @@ def run_generation(
             expr_config.minimum_output_token
             and num_output_tokens < expr_config.minimum_output_token
         ):
+            skipped_min_tokens += 1
             pbar.set_postfix(
                 {
                     "skipped": f"min_tokens: {num_output_tokens} < {expr_config.minimum_output_token}"
@@ -176,6 +180,7 @@ def run_generation(
             max_count = max(token_counts.values())
             max_ratio = max_count / num_output_tokens
             if max_ratio > expr_config.repeat_ratio:
+                skipped_repetition += 1
                 most_repeated_token = max(token_counts, key=token_counts.get)
                 pbar.set_postfix(
                     {
@@ -258,6 +263,10 @@ def run_generation(
         )
         if dataset_exhausted:
             print(f"Dataset exhausted at index {dataset_index}.")
+
+    print(f"Skipped due to repetition: {skipped_repetition}")
+    if expr_config.minimum_output_token is not None:
+        print(f"Skipped due to min tokens: {skipped_min_tokens}")
 
     return results
 

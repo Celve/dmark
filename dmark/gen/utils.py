@@ -20,6 +20,7 @@ class ExprConfig(BaseModel):
     output_dir: Optional[str]
     minimum_output_token: Optional[int]
     repeat_ratio: float = 0.2
+    batch_size: int = 1
     bitmap_device: str = "cpu"
 
 
@@ -38,6 +39,7 @@ def parse_args():
 
     # then we add number of samples and output directory
     parser.add_argument("--num_samples", type=int, default=100)
+    parser.add_argument("--batch_size", type=int, default=1, help="Number of prompts to generate per forward pass")
     parser.add_argument("--minimum_output_token", type=int, default=None)
     parser.add_argument("--repeat_ratio", type=float, default=0.2, 
                        help="Maximum ratio of any single token repetition (default: 0.2)")
@@ -91,6 +93,7 @@ def parse_args():
         output_dir=args.output_dir,
         minimum_output_token=args.minimum_output_token,
         repeat_ratio=args.repeat_ratio,
+        batch_size=args.batch_size,
         bitmap_device=args.bitmap_device,
     )
 

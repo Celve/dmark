@@ -11,7 +11,7 @@ from dmark.dataset.c4 import C4Dataset
 from dmark.dataset.eli5 import ELI5Dataset
 from dmark.dataset.gsm8k import GSM8KDataset
 from dmark.gen.utils import ExprConfig, GenConfig, generate_result_filename, parse_args
-from dmark.llada.gen_llada import generate
+from dmark.gen.llada import generate
 from dmark.watermark.config import WatermarkConfig
 from dmark.watermark.persistent_bitmap import PersistentBitmap
 from dmark.watermark.watermark import Watermark
@@ -52,8 +52,41 @@ def _build_dataset(gen_config: GenConfig, tokenizer) -> Any:
     )
 
 
-def run_generation(gen_config: GenConfig, watermark_config: WatermarkConfig, expr_config: ExprConfig) -> list[dict[str, Any]]:
-    tokenizer = AutoTokenizer.from_pretrained(gen_config.model, trust_remote_code=True)
+def _prepare_tokenizer(model_name: str):
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    if tokenizer.padding_side != "left":
+        tokenizer.padding_side = "left"
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = (
+            tokenizer.eos_token or tokenizer.unk_token or tokenizer.bos_token
+        )
+    if tokenizer.pad_token is None:
+        raise ValueError("Tokenizer must define a pad token for batch inference.")
+    if tokenizer.pad_token_id == 126336:
+        raise ValueError("Tokenizer pad token id conflicts with LLaDA mask id (126336).")
+    return tokenizer
+
+
+def _tensor_to_1d_cpu(tensor: torch.Tensor) -> torch.Tensor:
+    if not torch.is_tensor(tensor):
+        tensor = torch.tensor(tensor, dtype=torch.long)
+    else:
+        tensor = tensor.detach()
+    if tensor.dim() == 2 and tensor.shape[0] == 1:
+        tensor = tensor.squeeze(0)
+    if tensor.dim() != 1:
+        raise ValueError(
+            f"Expected dataset input_ids to be 1D or (1, L), got shape {tuple(tensor.shape)}"
+        )
+    return tensor.to(torch.long).cpu().contiguous()
+
+
+def run_generation(
+    gen_config: GenConfig,
+    watermark_config: WatermarkConfig,
+    expr_config: ExprConfig,
+) -> list[dict[str, Any]]:
+    tokenizer = _prepare_tokenizer(gen_config.model)
     dataset = _build_dataset(gen_config, tokenizer)
 
     watermark: Watermark | None = None
@@ -75,26 +108,128 @@ def run_generation(gen_config: GenConfig, watermark_config: WatermarkConfig, exp
         .eval()
     )
 
+    batch_size = max(1, expr_config.batch_size)
     results: list[dict[str, Any]] = []
     dataset_index = 0
+    dataset_exhausted = False
     pbar = tqdm.tqdm(total=expr_config.num_samples, desc="Collecting valid samples")
+
+    def fetch_next_sample():
+        nonlocal dataset_index
+        try:
+            raw = dataset.sample(dataset_index)
+        except IndexError:
+            return None
+        dataset_index += 1
+        prompt = raw["prompt"]
+        ground_truth = raw.get("ground_truth")
+        input_ids = _tensor_to_1d_cpu(raw["input_ids"])
+        return {
+            "prompt": prompt,
+            "ground_truth": ground_truth,
+            "input_ids": input_ids,
+        }
+
+    def collate_batch(batch_samples):
+        max_len = max(sample["input_ids"].shape[0] for sample in batch_samples)
+        batch_input_ids = torch.full(
+            (len(batch_samples), max_len),
+            tokenizer.pad_token_id,
+            dtype=torch.long,
+            device=DEVICE,
+        )
+        attention_mask = torch.zeros(
+            (len(batch_samples), max_len), dtype=torch.long, device=DEVICE
+        )
+        for idx, sample in enumerate(batch_samples):
+            seq = sample["input_ids"].to(DEVICE)
+            seq_len = seq.shape[0]
+            batch_input_ids[idx, max_len - seq_len :] = seq
+            attention_mask[idx, max_len - seq_len :] = 1
+        return batch_input_ids, attention_mask
+
+    def trim_special_tokens(output_ids: torch.Tensor) -> torch.Tensor:
+        trimmed_length = output_ids.shape[0]
+        for i, curr_token in enumerate(output_ids):
+            if curr_token.item() in (126081, 126348):
+                trimmed_length = i
+                break
+        return output_ids[:trimmed_length]
+
+    def process_sample(sample, output_ids_tensor):
+        output_ids = trim_special_tokens(output_ids_tensor.detach().cpu())
+        num_output_tokens = int(output_ids.shape[0])
+
+        if (
+            expr_config.minimum_output_token
+            and num_output_tokens < expr_config.minimum_output_token
+        ):
+            pbar.set_postfix(
+                {
+                    "skipped": f"min_tokens: {num_output_tokens} < {expr_config.minimum_output_token}"
+                }
+            )
+            return
+
+        if num_output_tokens > 0:
+            token_counts = Counter(output_ids.tolist())
+            max_count = max(token_counts.values())
+            max_ratio = max_count / num_output_tokens
+            if max_ratio > expr_config.repeat_ratio:
+                most_repeated_token = max(token_counts, key=token_counts.get)
+                pbar.set_postfix(
+                    {
+                        "skipped": (
+                            f"repetition: token {most_repeated_token} appears "
+                            f"{max_count}/{num_output_tokens} ({max_ratio:.1%})"
+                        )
+                    }
+                )
+                return
+
+        output_list = output_ids.tolist()
+        output_text = (
+            tokenizer.decode(output_list, skip_special_tokens=True) if output_list else ""
+        )
+
+        results.append(
+            {
+                "data": {
+                    "prompt": sample["prompt"],
+                    "ground_truth": sample["ground_truth"],
+                    "output": output_text,
+                    "output_ids": output_list,
+                    "num_output_tokens": num_output_tokens,
+                },
+                "generation_metadata": gen_config.model_dump(),
+                "watermark_metadata": watermark_config.model_dump()
+                if watermark_config.strategy is not None
+                else None,
+                "expr_metadata": expr_config.model_dump(),
+            }
+        )
+        pbar.update(1)
 
     try:
         while len(results) < expr_config.num_samples:
-            try:
-                sample = dataset.sample(dataset_index)
-            except IndexError:
-                print(f"Dataset exhausted at index {dataset_index}.")
+            remaining = expr_config.num_samples - len(results)
+            target_batch = min(batch_size, remaining)
+            batch_samples = []
+            while len(batch_samples) < target_batch:
+                sample = fetch_next_sample()
+                if sample is None:
+                    dataset_exhausted = True
+                    break
+                batch_samples.append(sample)
+
+            if not batch_samples:
                 break
 
-            dataset_index += 1
-            prompt = sample["prompt"]
-            ground_truth = sample.get("ground_truth")
-            input_ids = sample["input_ids"].to(DEVICE)
-
+            batch_input_ids, batch_attention_mask = collate_batch(batch_samples)
             out = generate(
                 model,
-                input_ids,
+                batch_input_ids,
+                attention_mask=batch_attention_mask,
                 steps=gen_config.steps,
                 gen_length=gen_config.gen_length,
                 block_length=gen_config.block_length,
@@ -103,74 +238,26 @@ def run_generation(gen_config: GenConfig, watermark_config: WatermarkConfig, exp
                 remasking=gen_config.remasking,
                 watermark=watermark,
             )
+            generated_segment = out[:, batch_input_ids.shape[1] :]
+            for idx, sample in enumerate(batch_samples):
+                process_sample(sample, generated_segment[idx])
 
-            output_ids = out[:, input_ids.shape[1]:][0].detach().cpu().tolist()
-
-            trimmed_length = len(output_ids)
-            for idx, curr_token in enumerate(output_ids):
-                if curr_token == 126081 or curr_token == 126348:
-                    trimmed_length = idx
-                    break
-            output_ids = output_ids[:trimmed_length]
-
-            num_output_tokens = len(output_ids)
-            if (
-                expr_config.minimum_output_token is not None
-                and num_output_tokens < expr_config.minimum_output_token
-            ):
-                pbar.set_postfix(
-                    {
-                        "skipped": f"min_tokens: {num_output_tokens} < {expr_config.minimum_output_token}"
-                    }
-                )
-                continue
-
-            if num_output_tokens > 0:
-                token_counts = Counter(output_ids)
-                max_count = max(token_counts.values())
-                max_ratio = max_count / num_output_tokens
-                if max_ratio > expr_config.repeat_ratio:
-                    most_repeated_token = max(token_counts, key=token_counts.get)
-                    pbar.set_postfix(
-                        {
-                            "skipped": f"repetition: token {most_repeated_token} appears {max_count}/{num_output_tokens} ({max_ratio:.1%})"
-                        }
-                    )
-                    continue
-
-            output_text = (
-                tokenizer.decode(output_ids, skip_special_tokens=True)
-                if output_ids
-                else ""
-            )
-
-            results.append(
-                {
-                    "data": {
-                        "prompt": prompt,
-                        "ground_truth": ground_truth,
-                        "output": output_text,
-                        "output_ids": output_ids,
-                        "num_output_tokens": num_output_tokens,
-                    },
-                    "generation_metadata": gen_config.model_dump(),
-                    "watermark_metadata": watermark_config.model_dump()
-                    if watermark_config.strategy is not None
-                    else None,
-                    "expr_metadata": expr_config.model_dump(),
-                }
-            )
-            pbar.update(1)
+            if dataset_exhausted:
+                break
 
     except KeyboardInterrupt:
         print(f"\n\nInterrupted! Collected {len(results)} samples so far.")
-    finally:
         pbar.close()
+        return results
+
+    pbar.close()
 
     if len(results) < expr_config.num_samples:
         print(
             f"Warning: Only collected {len(results)} valid samples out of {expr_config.num_samples} requested."
         )
+        if dataset_exhausted:
+            print(f"Dataset exhausted at index {dataset_index}.")
 
     return results
 

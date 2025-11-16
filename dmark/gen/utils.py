@@ -48,7 +48,7 @@ class DreamExprConfig(BaseModel):
     minimum_output_token: Optional[int]
     repeat_ratio: float = 0.2
     batch_size: int = 1
-    bitmap_device: str = "cuda"
+    bitmap_device: str = "cpu"
 
 
 def parse_args():
@@ -104,7 +104,7 @@ def parse_args():
     parser.add_argument(
         "--bitmap_device",
         type=str,
-        default="cuda",
+        default="cpu",
         choices=["cpu", "cuda"],
         help="Device to store the bitmap on",
     )

@@ -1,4 +1,4 @@
-from typing import Callable, Optional
+from typing import Optional
 
 import torch
 
@@ -22,6 +22,43 @@ class Watermark:
         green_list = self.bitmap.get_row(prev_token)
         return bool(green_list[token].item())
 
+    def _token_to_index(self, token: Optional[torch.Tensor | int]) -> Optional[int]:
+        if token is None:
+            return None
+        if isinstance(token, torch.Tensor):
+            return int(token.detach().item())
+        return int(token)
+
+    def _resolve_token_index(
+        self,
+        token: Optional[torch.Tensor | int],
+        logits: Optional[torch.Tensor],
+        *,
+        require_logits: bool,
+    ) -> Optional[int]:
+        if token is None:
+            if logits is None:
+                if require_logits:
+                    raise ValueError("Logits required to predict token when token is None")
+                return None
+            token = logits.argmax(dim=-1)
+        return self._token_to_index(token)
+
+    def _scaled_bitmap_bias(
+        self,
+        vector: torch.Tensor,
+        template: torch.Tensor,
+    ) -> torch.Tensor:
+        non_blocking = vector.device.type == "cpu" and template.device.type == "cuda"
+        bias = vector.to(device=template.device, dtype=template.dtype, non_blocking=non_blocking)
+        return bias * self.watermark_config.delta
+
+    def _row_bias(self, token_index: int, template: torch.Tensor) -> torch.Tensor:
+        return self._scaled_bitmap_bias(self.bitmap.get_row(token_index), template)
+
+    def _col_bias(self, token_index: int, template: torch.Tensor) -> torch.Tensor:
+        return self._scaled_bitmap_bias(self.bitmap.get_col(token_index), template)
+
     def apply_once(
         self,
         curr_logits: torch.Tensor,
@@ -30,53 +67,37 @@ class Watermark:
         next_logits: Optional[torch.Tensor],
         next_token: Optional[torch.Tensor],
     ) -> torch.Tensor:
-        prev_bias = torch.zeros_like(curr_logits)
-        next_bias = torch.zeros_like(curr_logits)
+        strategy = self.watermark_config.strategy
+        biases: list[torch.Tensor] = []
 
-        if self.watermark_config.strategy == "normal":
-            if prev_token is not None:
-                prev_bias = (
-                    self.bitmap.get_row(prev_token.item()).float().to(curr_logits.device)
-                    * self.watermark_config.delta
-                )
-        elif self.watermark_config.strategy == "predict":
-            if prev_token is None: 
-                prev_token = prev_logits.argmax(dim=-1) 
-            prev_bias = (
-                self.bitmap.get_row(prev_token.item()).float().to(curr_logits.device)
-                * self.watermark_config.delta
-            ) 
-        elif self.watermark_config.strategy == "bidirectional":
-            if prev_token is not None:
-                prev_bias = (
-                    self.bitmap.get_row(prev_token.item()).float().to(curr_logits.device)
-                    * self.watermark_config.delta
-                )
-            
-            if next_token is not None:
-                next_bias = (
-                    self.bitmap.get_col(next_token.item()).float().to(curr_logits.device)
-                    * self.watermark_config.delta
-                )
-        elif self.watermark_config.strategy == "predict-bidirectional":
-            if prev_token is None:
-                prev_token = prev_logits.argmax(dim=-1)
-            prev_bias = (
-                self.bitmap.get_row(prev_token.item()).float().to(curr_logits.device)
-                * self.watermark_config.delta
-            )
-            
-            if next_token is None and next_logits is not None:
-                next_token = next_logits.argmax(dim=-1)
-            if next_token is not None:
-                next_bias = (
-                    self.bitmap.get_col(next_token.item()).float().to(curr_logits.device)
-                    * self.watermark_config.delta
-                )
-        else: 
-            raise ValueError(f"Invalid strategy: {self.watermark_config.strategy}")
+        if strategy == "normal":
+            prev_idx = self._token_to_index(prev_token)
+            if prev_idx is not None:
+                biases.append(self._row_bias(prev_idx, curr_logits))
+        elif strategy == "predict":
+            prev_idx = self._resolve_token_index(prev_token, prev_logits, require_logits=True)
+            biases.append(self._row_bias(prev_idx, curr_logits))
+        elif strategy == "bidirectional":
+            prev_idx = self._token_to_index(prev_token)
+            if prev_idx is not None:
+                biases.append(self._row_bias(prev_idx, curr_logits))
 
-        biased_logits = curr_logits + prev_bias + next_bias
+            next_idx = self._token_to_index(next_token)
+            if next_idx is not None:
+                biases.append(self._col_bias(next_idx, curr_logits))
+        elif strategy == "predict-bidirectional":
+            prev_idx = self._resolve_token_index(prev_token, prev_logits, require_logits=True)
+            biases.append(self._row_bias(prev_idx, curr_logits))
+
+            next_idx = self._resolve_token_index(next_token, next_logits, require_logits=False)
+            if next_idx is not None:
+                biases.append(self._col_bias(next_idx, curr_logits))
+        else:
+            raise ValueError(f"Invalid strategy: {strategy}")
+
+        biased_logits = curr_logits
+        for bias in biases:
+            biased_logits = biased_logits + bias
         result = torch.argmax(biased_logits)  # TODO: sampling also matters here
         return result
 

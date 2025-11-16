@@ -214,7 +214,7 @@ def parse_dream_args():
     parser.add_argument(
         "--bitmap_device",
         type=str,
-        default="cuda",
+        default="cpu",
         choices=["cpu", "cuda"],
         help="Device to store the bitmap on",
     )

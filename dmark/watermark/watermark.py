@@ -89,7 +89,13 @@ class Watermark:
         end_index: int,
     ) -> torch.Tensor:
         biased_logits = logits.clone()
-        predicted = logits[:, start_index - 1 : end_index - 1].argmax(dim=-1)
+        prev_slice = x[:, start_index - 1 : end_index - 1]
+        model_pred = logits[:, start_index - 1 : end_index - 1].argmax(dim=-1)
+        predicted = torch.where(
+            prev_slice == mask_id,
+            model_pred,
+            prev_slice.to(model_pred.device),
+        )
         for i in range(logits.shape[0]):
             bias = (
                 (x[i, start_index - 1 : end_index - 1] != mask_id).unsqueeze(1).float()

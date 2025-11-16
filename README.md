@@ -2,6 +2,8 @@
 
 A watermarking system for diffusion-based large language models supporting LLaDA and DREAM models.
 
+> **Note:** Generation entrypoints now live under `dmark/gen`. The older `dmark/llada` directory is deprecated and kept only for backward compatibility.
+
 ## Installation
 
 ```bash
@@ -38,11 +40,13 @@ python -m dmark.watermark.preprocess \
 
 ### 2. Run Generation
 
-**LLaDA Model:**
+_Use the refreshed drivers in `dmark/gen`. The legacy `dmark/llada` scripts remain temporarily but are deprecated and will be removed in a later release._
+
+**LLaDA Model (preferred path):**
 ```bash
-python -m dmark.llada.only_gen \
-    --model GSAI-ML/LLaDA-8B-Instruct \
+python -m dmark.gen.eval_llada \
     --dataset sentence-transformers/eli5 \
+    --model GSAI-ML/LLaDA-8B-Instruct \
     --num_samples 100 \
     --gen_length 256 \
     --strategy normal \
@@ -51,17 +55,17 @@ python -m dmark.llada.only_gen \
     --minimum_output_token 200
 ```
 
-**DREAM Model:**
+**DREAM Model (preferred path):**
 ```bash
-python -m dmark.llada.only_gen_dream \
-    --model Dream-org/Dream-v0-Instruct-7B \
+python -m dmark.gen.eval_dream \
     --dataset sentence-transformers/eli5 \
+    --model Dream-org/Dream-v0-Instruct-7B \
     --num_samples 100 \
     --gen_length 256 \
     --steps 512 \
     --alg entropy \
     --strategy normal \
-    --bitmap bitmaps/bitmap_v126464_r50_k42.bin \
+    --bitmap bitmaps/bitmap_v152064_r50_k42.bin \
     --delta 2.0
 ```
 
@@ -358,9 +362,13 @@ python utils/generate_experiments.py config.json --max-commands 10
 ```
 dmark/
 ├── dmark/                    # Main package
-│   ├── llada/               # Generation modules
-│   │   ├── only_gen.py      # LLaDA generation
-│   │   └── only_gen_dream.py # DREAM generation
+│   ├── llada/               # Legacy generation modules (deprecated; prefer dmark/gen)
+│   │   ├── only_gen.py      # LLaDA generation (deprecated; use dmark/gen/eval_llada.py)
+│   │   └── only_gen_dream.py # DREAM generation (deprecated; use dmark/gen/eval_dream.py)
+│   ├── gen/                 # Preferred generation entrypoints
+│   │   ├── eval_llada.py    # LLaDA batch runner
+│   │   ├── eval_dream.py    # DREAM batch runner
+│   │   └── utils.py         # Shared generation configs & CLIs
 │   ├── watermark/           # Watermarking modules
 │   │   ├── watermark.py     # Core watermark class
 │   │   ├── config.py        # Configuration

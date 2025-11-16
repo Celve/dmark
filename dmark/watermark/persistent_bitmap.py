@@ -9,7 +9,7 @@ class PersistentBitmap:
     def __init__(self, vocab_size: int, filepath: str, initialize: bool = False, device: str = "cuda"):
         self.vocab_size = vocab_size
         self.filepath = filepath
-        self.device = device
+        self.device = torch.device(device)
 
         if initialize:
             self._initialize()
@@ -24,6 +24,7 @@ class PersistentBitmap:
 
     def _initialize(self):
         self.matrix = torch.zeros((self.vocab_size, self.vocab_size), dtype=torch.bool, device=self.device)
+        self._maybe_pin_memory()
         self._save()
 
     def _load(self):
@@ -46,7 +47,13 @@ class PersistentBitmap:
         unpacked_bits = unpacked_bits[:needed_bits]
         
         # Convert to torch tensor and reshape
-        self.matrix = torch.from_numpy(unpacked_bits).bool().reshape(self.vocab_size, self.vocab_size).to(self.device)
+        self.matrix = (
+            torch.from_numpy(unpacked_bits)
+            .bool()
+            .reshape(self.vocab_size, self.vocab_size)
+            .to(self.device)
+        )
+        self._maybe_pin_memory()
 
     def _save(self):
         # Convert to numpy for packing
@@ -80,7 +87,7 @@ class PersistentBitmap:
     def get_row(self, x: int) -> torch.Tensor:
         if x >= self.vocab_size:
             raise IndexError(f"Token index out of bounds: vocab_size={self.vocab_size}")
-        return self.matrix[x].clone()
+        return self.matrix[x]
     
     def get_rows(self, indices: torch.Tensor) -> torch.Tensor:
         """Efficiently get multiple rows using tensor indexing.
@@ -99,7 +106,7 @@ class PersistentBitmap:
     def get_col(self, y: int) -> torch.Tensor:
         if y >= self.vocab_size:
             raise IndexError(f"Token index out of bounds: vocab_size={self.vocab_size}")
-        return self.matrix[:, y].clone()
+        return self.matrix[:, y]
     
     def get_cols(self, indices: torch.Tensor) -> torch.Tensor:
         """Efficiently get multiple columns using tensor indexing.
@@ -141,5 +148,11 @@ class PersistentBitmap:
     def to(self, device):
         """Move the matrix to a specific device (CPU/GPU)."""
         self.matrix = self.matrix.to(device)
-        self.device = device
+        self.device = torch.device(device)
+        self._maybe_pin_memory()
         return self
+
+    def _maybe_pin_memory(self):
+        """Pin host memory so host→device transfers can be non-blocking."""
+        if self.matrix.device.type == "cpu" and not self.matrix.is_pinned():
+            self.matrix = self.matrix.pin_memory()

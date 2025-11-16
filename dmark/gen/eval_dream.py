@@ -16,7 +16,7 @@ from dmark.gen.utils import (
     generate_dream_result_filename,
     parse_dream_args,
 )
-from dmark.llada.gen_dream import DreamGenerationMixin
+from dmark.gen.dream import DreamGenerationMixin
 from dmark.watermark.config import WatermarkConfig
 from dmark.watermark.persistent_bitmap import PersistentBitmap
 from dmark.watermark.watermark import Watermark
@@ -94,7 +94,9 @@ def run_generation(
 ) -> list[dict[str, Any]]:
     tokenizer = _prepare_tokenizer(gen_config.model)
     dataset = _build_dataset(gen_config, tokenizer)
-    stop_token_ids = [tokenizer.eos_token_id]
+    stop_token_ids: set[int] = set()
+    if tokenizer.eos_token_id is not None:
+        stop_token_ids.add(tokenizer.eos_token_id)
 
     watermark: Watermark | None = None
     if watermark_config.strategy is not None:
@@ -267,6 +269,8 @@ def run_generation(
         generation_kwargs["top_k"] = gen_config.top_k
     if watermark is not None:
         generation_kwargs["watermark"] = watermark
+    if expr_config.ignore_eos:
+        generation_kwargs["logits_eos_inf"] = True
 
     try:
         while len(results) < expr_config.num_samples:

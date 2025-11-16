@@ -92,6 +92,13 @@ def sample_tokens(logits, temperature=0.0, top_p=None, top_k=None, margin_confid
     return confidence, x0
 
 
+def _mask_blocked_logits(logits: torch.Tensor, blocked_token_tensor: Optional[torch.Tensor]):
+    if blocked_token_tensor is None or blocked_token_tensor.numel() == 0:
+        return
+    mask_value = torch.finfo(logits.dtype).min
+    logits.index_fill_(2, blocked_token_tensor, mask_value)
+
+
 @dataclass
 class DreamModelOutput(ModelOutput):
     sequences: torch.LongTensor = None
@@ -103,6 +110,7 @@ class DreamGenerationConfig(GenerationConfig):
         self.temperature: float = kwargs.pop("temperature", 0.0)
         self.top_p: Optional[float] = kwargs.pop("top_p", None)
         self.top_k: Optional[int] = kwargs.pop("top_k", None)
+        self.logits_eos_inf: bool = kwargs.pop("logits_eos_inf", False)
         self.max_length = kwargs.pop("max_length", 20)
         self.max_new_tokens = kwargs.pop("max_new_tokens", None)
         # diffusion specific params
@@ -277,10 +285,14 @@ class DreamGenerationMixin:
         eos_token_tensor = _tensor_or_none(generation_config.eos_token_id, device=device)
         pad_token_tensor = _tensor_or_none(generation_config.pad_token_id, device=device)
         mask_token_tensor = _tensor_or_none(generation_config.mask_token_id, device=device)
+        blocked_token_tensor = None
 
         # We can have more than one eos token. Always treat it as a 1D tensor (when it exists).
         if eos_token_tensor is not None and eos_token_tensor.ndim == 0:
             eos_token_tensor = eos_token_tensor.unsqueeze(0)
+
+        if generation_config.logits_eos_inf and eos_token_tensor is not None:
+            blocked_token_tensor = eos_token_tensor.reshape(-1)
 
         # Set pad token if unset (and there are conditions to do so)
         if pad_token_tensor is None and eos_token_tensor is not None:
@@ -295,6 +307,7 @@ class DreamGenerationMixin:
         generation_config._eos_token_tensor = eos_token_tensor
         generation_config._pad_token_tensor = pad_token_tensor
         generation_config._mask_token_tensor = mask_token_tensor
+        generation_config._blocked_token_tensor = blocked_token_tensor
 
     @torch.no_grad()
     def diffusion_generate(
@@ -386,6 +399,7 @@ class DreamGenerationMixin:
         temperature = generation_config.temperature
         top_p = generation_config.top_p
         top_k = generation_config.top_k
+        blocked_token_tensor = getattr(generation_config, "_blocked_token_tensor", None)
 
         histories = [] if (return_dict_in_generate and output_history) else None
 
@@ -426,6 +440,8 @@ class DreamGenerationMixin:
                     input_ids.shape[1],
                     max_length,
                 )
+
+            _mask_blocked_logits(logits, blocked_token_tensor)
 
             mask_logits = logits[mask_index]
             t = timesteps[i]

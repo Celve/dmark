@@ -88,6 +88,9 @@ def run_generation(
 ) -> list[dict[str, Any]]:
     tokenizer = _prepare_tokenizer(gen_config.model)
     dataset = _build_dataset(gen_config, tokenizer)
+    stop_token_ids = {126081, 126348}
+    if tokenizer.eos_token_id is not None:
+        stop_token_ids.add(tokenizer.eos_token_id)
 
     watermark: Watermark | None = None
     if watermark_config.strategy is not None:
@@ -153,7 +156,7 @@ def run_generation(
     def trim_special_tokens(output_ids: torch.Tensor) -> torch.Tensor:
         trimmed_length = output_ids.shape[0]
         for i, curr_token in enumerate(output_ids):
-            if curr_token.item() in (126081, 126348):
+            if curr_token.item() in stop_token_ids:
                 trimmed_length = i
                 break
         return output_ids[:trimmed_length]
@@ -242,6 +245,7 @@ def run_generation(
                 cfg_scale=gen_config.cfg_scale,
                 remasking=gen_config.remasking,
                 watermark=watermark,
+                logits_eos_inf=expr_config.ignore_eos,
             )
             generated_segment = out[:, batch_input_ids.shape[1] :]
             for idx, sample in enumerate(batch_samples):

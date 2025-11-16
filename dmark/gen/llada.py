@@ -20,6 +20,13 @@ def add_gumbel_noise(logits, temperature):
     return logits.exp() / gumbel_noise
 
 
+def _mask_blocked_tokens(logits_tensor: torch.Tensor, blocked_token_ids: Optional[torch.Tensor]):
+    if blocked_token_ids is None or blocked_token_ids.numel() == 0:
+        return
+    mask_value = torch.finfo(logits_tensor.dtype).min
+    logits_tensor.index_fill_(2, blocked_token_ids, mask_value)
+
+
 def get_num_transfer_tokens(mask_index, steps):
     '''
     In the reverse process, the interval [0, 1] is uniformly discretized into steps intervals.
@@ -125,6 +132,12 @@ def generate(
     assert steps % num_blocks == 0
     steps = steps // num_blocks
 
+    suppressed_token_tensor = None
+    if logits_eos_inf:
+        suppressed_token_tensor = torch.tensor(
+            [126081, 126348], device=model.device, dtype=torch.long
+        )
+
     for num_block in range(num_blocks):
         block_mask_index = (x[:, prompt.shape[1] + num_block * block_length: prompt.shape[1] + (num_block + 1) * block_length:] == mask_id)
         num_transfer_tokens = get_num_transfer_tokens(block_mask_index, steps)
@@ -142,12 +155,14 @@ def generate(
             else:
                 logits = model(x, attention_mask=attention_mask).logits
 
-            if logits_eos_inf:
-                logits[:, :, 126081] = -torch.inf
+            _mask_blocked_tokens(logits, suppressed_token_tensor)
 
             logits_with_noise = add_gumbel_noise(logits, temperature=temperature)
+
+            _mask_blocked_tokens(logits_with_noise, suppressed_token_tensor)
             
             logits_with_watermark = apply_ranged_watermark(x, mask_id, logits_with_noise, prompt.shape[1] + num_block * block_length, prompt.shape[1] + (num_block + 1) * block_length, watermark)
+            _mask_blocked_tokens(logits_with_watermark, suppressed_token_tensor)
 
             x0 = torch.argmax(logits_with_noise, dim=-1) # b, l
             

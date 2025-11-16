@@ -25,6 +25,7 @@ class ExprConfig(BaseModel):
     repeat_ratio: float = 0.2
     batch_size: int = 1
     bitmap_device: str = "cpu"
+    ignore_eos: bool = False
 
 
 class DreamGenConfig(BaseModel):
@@ -49,6 +50,7 @@ class DreamExprConfig(BaseModel):
     repeat_ratio: float = 0.2
     batch_size: int = 1
     bitmap_device: str = "cpu"
+    ignore_eos: bool = False
 
 
 def parse_args():
@@ -74,6 +76,11 @@ def parse_args():
         help="Maximum ratio of any single token repetition (default: 0.2)",
     )
     parser.add_argument("--output_dir", type=str, default=None)
+    parser.add_argument(
+        "--ignore_eos",
+        action="store_true",
+        help="Prevent generation from sampling the EOS token",
+    )
 
     parser.add_argument("--steps", type=int, default=256)
     parser.add_argument("--gen_length", type=int, default=256)
@@ -144,6 +151,7 @@ def parse_args():
         repeat_ratio=args.repeat_ratio,
         batch_size=args.batch_size,
         bitmap_device=args.bitmap_device,
+        ignore_eos=args.ignore_eos,
     )
 
     return gen_config, watermark_config, expr_config
@@ -170,6 +178,11 @@ def parse_dream_args():
         help="Maximum ratio of any single token repetition (default: 0.2)",
     )
     parser.add_argument("--output_dir", type=str, default=None)
+    parser.add_argument(
+        "--ignore_eos",
+        action="store_true",
+        help="Prevent generation from sampling the EOS token",
+    )
 
     parser.add_argument("--steps", type=int, default=256)
     parser.add_argument("--gen_length", type=int, default=256)
@@ -258,6 +271,7 @@ def parse_dream_args():
         repeat_ratio=args.repeat_ratio,
         batch_size=args.batch_size,
         bitmap_device=args.bitmap_device,
+        ignore_eos=args.ignore_eos,
     )
 
     return gen_config, watermark_config, expr_config
@@ -293,6 +307,8 @@ def _finalize_filename_components(
     minimum_output_token = getattr(expr_config, "minimum_output_token", None)
     if minimum_output_token is not None:
         components.append(f"min{minimum_output_token}")
+    if getattr(expr_config, "ignore_eos", False):
+        components.append("noeos")
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     components.append(timestamp)

@@ -82,7 +82,7 @@ python utils/generate_experiments.py utils/experiments/llada/baseline_no_waterma
 
 # Split into multiple scripts for parallel execution
 python utils/generate_experiments.py \
-    utils/experiments/llada/qa_watermark_strategies.json \
+    utils/experiments/llada/qa_watermark.json \
     --split 4
 
 # Run split scripts in parallel

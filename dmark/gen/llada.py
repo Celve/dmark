@@ -1,9 +1,10 @@
 from typing import Optional
-import torch
+
 import numpy as np
+import torch
 import torch.nn.functional as F
 
-from dmark.watermark.watermark import Watermark
+from dmark.watermark.watermark.base import BaseWatermark
 
 
 def add_gumbel_noise(logits, temperature):
@@ -47,7 +48,7 @@ def get_num_transfer_tokens(mask_index, steps):
 
     return num_transfer_tokens
 
-def apply_single_watermark(x, x0, mask_id, logits_with_noise, logits_with_watermark, batch_index, index, watermark: Optional[Watermark]): 
+def apply_single_watermark(x, x0, mask_id, logits_with_noise, logits_with_watermark, batch_index, index, watermark: Optional[BaseWatermark]): 
     if watermark is None:
         return
     if x[batch_index, index - 1] == mask_id:
@@ -65,19 +66,19 @@ def apply_single_watermark(x, x0, mask_id, logits_with_noise, logits_with_waterm
     else:
         next_logits = None
         next_token = x[batch_index, index + 1]
-    x0[batch_index, index] = watermark.apply_once(
+    x0[batch_index, index] = watermark.apply_single(
         logits_with_noise[batch_index, index],
         prev_logits,
         prev_token,
         next_logits,
         next_token,
+        index=index,
     )
 
-def apply_ranged_watermark(x, mask_id, logits_with_noise, start_index, end_index, watermark: Optional[Watermark]) -> torch.Tensor: 
+def apply_ranged_watermark(x, mask_id, logits_with_noise, start_index, end_index, watermark: Optional[BaseWatermark]) -> torch.Tensor: 
     if watermark is not None and watermark.watermark_config.prebias:
-        logits_todo = watermark.apply_all(
+        logits_todo = watermark.apply_range(
             x,
-            mask_id,
             logits_with_noise,
             start_index,
             end_index,
@@ -102,7 +103,7 @@ def generate(
     mask_id=126336,
     logits_eos_inf=False,
     confidence_eos_eot_inf=False,
-    watermark: Optional[Watermark] = None,
+    watermark: Optional[BaseWatermark] = None,
 ):
     '''
     Args:

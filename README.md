@@ -15,25 +15,34 @@ conda activate dmark
 
 ### 1. Generate Bitmap
 
-For Llada: 
+Key flags (`python -m dmark.watermark.preprocess`):
+- `--output_dir`: Destination directory for `.bin` files (default: current working dir).
+- `--vocab_size`: Pick 126464 for LLaDA or 152064 for DREAM unless you changed tokenizer size.
+- `--ratio`: Fraction of tokens in each green list (default 0.5).
+- `--key`: Pseudorandom seed that drives bitmap construction (default 42).
+- `--device`: `cuda` (default) or `cpu` for building the matrix.
+
+For LLaDA:
 
 ```bash
 python -m dmark.watermark.preprocess \
     --output_dir bitmaps/ \
     --vocab_size 126464 \
     --ratio 0.5 \
-    --key 42
+    --key 42 \
+    --device cuda
 # Creates: bitmaps/bitmap_v126464_r50_k42.bin
 ```
 
-For Dream 7B: 
+For DREAM 7B:
 
 ```bash
 python -m dmark.watermark.preprocess \
     --output_dir bitmaps/ \
     --vocab_size 152064 \
     --ratio 0.5 \
-    --key 42
+    --key 42 \
+    --device cuda
 # Creates: bitmaps/bitmap_v152064_r50_k42.bin
 ```
 
@@ -42,32 +51,78 @@ python -m dmark.watermark.preprocess \
 
 _Use the refreshed drivers in `dmark/gen`. The legacy `dmark/llada` scripts remain temporarily but are deprecated and will be removed in a later release._
 
-**LLaDA Model (preferred path):**
+**Shared options (`dmark.gen.eval_llada` + `dmark.gen.eval_dream`)**
+- `--dataset`: Hugging Face dataset (`sentence-transformers/eli5`, `allenai/c4`, `openai/gsm8k`, …).
+- `--model`: HF repo ID or path to a local checkpoint folder.
+- `--num_samples`: Accepted generations to collect.
+- `--batch_size`: Prompts per forward pass.
+- `--minimum_output_token`: Reject samples shorter than this many tokens.
+- `--repeat_ratio`: Skip samples when a token exceeds this repetition ratio.
+- `--output_dir`: Destination directory (created automatically).
+- `--ignore_eos`: When set, logits for EOS/EoT are forced to `-inf` so sampling always runs the full `gen_length` window.
+
+**Watermark options**
+- `--strategy`: `normal`, `predict`, `bidirectional`, `predict-bidirectional` (LLaDA additionally accepts `legacy-ahead` / `legacy-both`).
+- `--bitmap`: Path to the `.bin` bitmap.
+- `--bitmap_device`: `cpu` or `cuda` placement for the bitmap tensor.
+- `--vocab_size`, `--ratio`, `--delta`, `--key`, `--prebias`: Hyperparameters passed straight into `WatermarkConfig`.
+
+**LLaDA-specific flags** (`parse_args` in `dmark/gen/utils.py`)
+- `--steps`: Total diffusion steps (split evenly across blocks).
+- `--gen_length`: Target continuation length.
+- `--block_length`: Size of each semi-autoregressive block (must divide `gen_length`).
+- `--temperature`: Gumbel-max temperature (0.0 = greedy argmax).
+- `--cfg_scale`: Classifier-free guidance scale.
+- `--remasking`: `low_confidence`, `random`, `right_to_left`, or `left_to_right`.
+
+**DREAM-specific flags** (`parse_dream_args` in `dmark/gen/utils.py`)
+- `--steps`: Diffusion iterations.
+- `--gen_length`: Max new tokens (passed to `diffusion_generate`).
+- `--temperature`: Sampling temperature (applied inside `sample_tokens`).
+- `--top_p`, `--top_k`: Nucleus/top-k filtering for intermediate proposals.
+- `--alg`: `origin`, `maskgit_plus`, `topk_margin`, or `entropy`.
+- `--alg_temp`: Temperature for algorithm-specific resampling when using probabilistic selection.
+- `--eps`: Minimum noise level.
+- `--output_history`: Return intermediate diffusion states.
+- `--return_dict_in_generate` / `--no-return_dict_in_generate`: Toggle between a `DreamModelOutput` struct and raw tensors.
+
+**LLaDA Model (preferred path, left-padded batches):**
 ```bash
 python -m dmark.gen.eval_llada \
     --dataset sentence-transformers/eli5 \
     --model GSAI-ML/LLaDA-8B-Instruct \
-    --num_samples 100 \
+    --num_samples 128 \
+    --batch_size 8 \
+    --steps 256 \
+    --block_length 32 \
     --gen_length 256 \
-    --strategy normal \
+    --strategy predict-bidirectional \
     --bitmap bitmaps/bitmap_v126464_r50_k42.bin \
+    --bitmap_device cpu \
     --delta 2.0 \
-    --minimum_output_token 200
+    --ignore_eos \
+    --minimum_output_token 200 \
+    --output_dir runs/llada_samples
 ```
 
-**DREAM Model (preferred path):**
+**DREAM Model (preferred path, diffusion_generate batches):**
 ```bash
 python -m dmark.gen.eval_dream \
     --dataset sentence-transformers/eli5 \
     --model Dream-org/Dream-v0-Instruct-7B \
-    --num_samples 100 \
+    --num_samples 64 \
+    --batch_size 2 \
+    --steps 256 \
     --gen_length 256 \
-    --steps 512 \
     --alg entropy \
     --strategy normal \
     --bitmap bitmaps/bitmap_v152064_r50_k42.bin \
-    --delta 2.0
+    --bitmap_device cpu \
+    --delta 2.0 \
+    --ignore_eos \
+    --output_dir runs/dream_samples
 ```
+
 
 ## Batch Experiments
 
@@ -108,9 +163,19 @@ Located in `utils/experiments/llada/`:
 ## Evaluation
 
 ### Watermark Detection (Z-Score)
+
+Important flags (`python -m dmark.eval.zscore`):
+- `--input`: Single JSON file or directory; combine with `--increment` to skip already-tagged outputs.
+- `--output` / `--tag`: Control where `_zscore` files land.
+- `--bitmap_dir` / `--bitmap_device`: Where to look for `.bin` files and what device to keep them on.
+- Manual override knobs (`--vocab_size`, `--ratio`, `--delta`, `--key`, `--prebias`, `--strategy`, `--use_manual_config`) kick in when result files lack metadata.
+- `--model`: Tokenizer to use when metadata is missing.
+- `--max_tokens`: Cap on tokens per sample (default 200).
 ```bash
 python -m dmark.eval.zscore \
     --input results.json \
+    --bitmap_dir bitmaps/ \
+    --bitmap_device cpu \
     --bitmap bitmaps/bitmap_v126464_r50_k42.bin \
     --model GSAI-ML/LLaDA-8B-Instruct
 ```
@@ -123,10 +188,17 @@ python -m dmark.eval.zscore \
 This allows comparison of watermark detection strength across different processing stages.
 
 ### Text Quality (Perplexity)
+
+Key options (`python -m dmark.eval.ppl`):
+- `--input`: JSON file or directory (supports `--increment`).
+- `--output` / `--tag`: Control destination naming (defaults to `{input}_{tag}`).
+- `--model`: HF model name or local directory for perplexity evaluation.
+- `--device`: `cuda` or `cpu` (auto-falls back if CUDA is unavailable).
 ```bash
 python -m dmark.eval.ppl \
     --input results.json \
-    --model meta-llama/Meta-Llama-3-8B-Instruct
+    --model meta-llama/Meta-Llama-3-8B-Instruct \
+    --device cuda
 ```
 
 ### Robustness Testing (Attacks)
@@ -154,6 +226,14 @@ Field priority in z-score evaluation:
 1. `attacked_ids` (if present)
 2. `truncated_output_ids` (if present)
 3. `output_ids` (fallback)
+
+Key flags (`python -m dmark.attack.attacks`):
+- `--input` / `--output`: Target JSON file or directory plus destination (auto suffix if omitted).
+- `--attack`: `swap`, `delete`, `insert`, `synonym`, or `paraphrase`.
+- `--ratio`, `--seed`, `--min-output-length`: Control how aggressive the edit is (truncate before attacking).
+- `--model`: Tokenizer to respect when trimming text.
+- Paraphrase-specific knobs: `--api-provider`, `--api-key`, `--api-model`, `--api-base`, `--temperature`, `--max-concurrent`.
+- `--increment`: Skip files already processed in the output directory.
 
 #### Attack Single File
 ```bash
@@ -219,10 +299,17 @@ python -m dmark.analysis.threshold_calculator \
 ### Data Truncation
 Truncate outputs to minimum length specified in experiment metadata (for fair comparison):
 
+Key switches (`python -m dmark.eval.truncate`):
+- `--input`: JSON file or directory.
+- `--output`: Optional destination (defaults to `<name>_truncated`).
+- `--min_length`: Explicit override when you don't want to rely on metadata.
+- `--model`: Tokenizer to use if metadata is missing.
+
 ```bash
 # Truncate single file (auto-detects min_length from expr_metadata)
 python -m dmark.eval.truncate \
-    --input results.json
+    --input results.json \
+    --output results_truncated.json
 
 # Truncate directory (creates results_truncated/)
 python -m dmark.eval.truncate \

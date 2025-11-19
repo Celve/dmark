@@ -10,16 +10,16 @@ from transformers import AutoModel, AutoTokenizer
 from dmark.dataset.c4 import C4Dataset
 from dmark.dataset.eli5 import ELI5Dataset
 from dmark.dataset.gsm8k import GSM8KDataset
+from dmark.gen.dream import DreamGenerationMixin
 from dmark.gen.utils import (
     DreamExprConfig,
     DreamGenConfig,
+    build_watermark,
     generate_dream_result_filename,
     parse_dream_args,
 )
-from dmark.gen.dream import DreamGenerationMixin
 from dmark.watermark.config import WatermarkConfig
-from dmark.watermark.persistent_bitmap import PersistentBitmap
-from dmark.watermark.watermark import Watermark
+from dmark.watermark.watermark.base import BaseWatermark
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -86,6 +86,15 @@ def _tensor_to_1d_cpu(tensor: torch.Tensor) -> torch.Tensor:
     return tensor.to(torch.long).cpu().contiguous()
 
 
+def _resolve_mask_token_id(model) -> int:
+    mask_id = getattr(getattr(model, "generation_config", None), "mask_token_id", None)
+    if mask_id is None:
+        mask_id = getattr(getattr(model, "config", None), "mask_token_id", None)
+    if mask_id is None:
+        raise ValueError("Model does not define mask_token_id; cannot enable watermarking.")
+    return int(mask_id)
+
+
 
 def run_generation(
     gen_config: DreamGenConfig,
@@ -98,15 +107,6 @@ def run_generation(
     if tokenizer.eos_token_id is not None:
         stop_token_ids.add(tokenizer.eos_token_id)
 
-    watermark: Watermark | None = None
-    if watermark_config.strategy is not None:
-        bitmap = PersistentBitmap(
-            watermark_config.vocab_size,
-            watermark_config.bitmap_path,
-            device=expr_config.bitmap_device,
-        )
-        watermark = Watermark(watermark_config, bitmap)
-
     model = (
         AutoModel.from_pretrained(
             gen_config.model,
@@ -116,6 +116,15 @@ def run_generation(
         .to(DEVICE)
         .eval()
     )
+
+    watermark: BaseWatermark | None = None
+    if watermark_config.strategy is not None:
+        mask_id = _resolve_mask_token_id(model)
+        watermark = build_watermark(
+            watermark_config,
+            bitmap_device=expr_config.bitmap_device,
+            mask_id=mask_id,
+        )
 
     if watermark is not None:
         model.diffusion_generate = DreamGenerationMixin.diffusion_generate.__get__(

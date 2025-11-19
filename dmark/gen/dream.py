@@ -31,7 +31,7 @@ from transformers.utils import (
     logging,
 )
 
-from dmark.watermark.watermark import Watermark
+from dmark.watermark.watermark.base import BaseWatermark
 
 logger = logging.get_logger(__name__)
 
@@ -314,7 +314,7 @@ class DreamGenerationMixin:
         self,
         inputs: Optional[torch.Tensor] = None,
         generation_config: Optional[DreamGenerationConfig] = None,
-        watermark: Optional[Watermark] = None,
+        watermark: Optional[BaseWatermark] = None,
         **kwargs,
     ) -> Union[DreamModelOutput, torch.LongTensor]:
         # 1. Handle `generation_config` and kwargs that might update it, and validate the `.generate()` call
@@ -385,7 +385,7 @@ class DreamGenerationMixin:
         generation_config: DreamGenerationConfig,
         generation_tokens_hook_func,
         generation_logits_hook_func,
-        watermark: Optional[Watermark] = None,
+        watermark: Optional[BaseWatermark] = None,
     ) -> Union[DreamModelOutput, torch.LongTensor]:
         # init values
         output_history = generation_config.output_history
@@ -433,12 +433,11 @@ class DreamGenerationMixin:
             # this allows user-defined logits control of the intermediate steps
             logits = generation_logits_hook_func(i, x, logits)
             if watermark is not None:
-                logits = watermark.apply_all(
+                logits = watermark.apply_range(
                     x,
-                    mask_token_id,
                     logits,
                     input_ids.shape[1],
-                    max_length,
+                    max_length - 1,
                 )
 
             _mask_blocked_logits(logits, blocked_token_tensor)

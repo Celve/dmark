@@ -10,11 +10,16 @@ from transformers import AutoModel, AutoTokenizer
 from dmark.dataset.c4 import C4Dataset
 from dmark.dataset.eli5 import ELI5Dataset
 from dmark.dataset.gsm8k import GSM8KDataset
-from dmark.gen.utils import ExprConfig, GenConfig, generate_result_filename, parse_args
 from dmark.gen.llada import generate
+from dmark.gen.utils import (
+    ExprConfig,
+    GenConfig,
+    build_watermark,
+    generate_result_filename,
+    parse_args,
+)
 from dmark.watermark.config import WatermarkConfig
-from dmark.watermark.persistent_bitmap import PersistentBitmap
-from dmark.watermark.watermark import Watermark
+from dmark.watermark.watermark.base import BaseWatermark
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -92,14 +97,11 @@ def run_generation(
     if tokenizer.eos_token_id is not None:
         stop_token_ids.add(tokenizer.eos_token_id)
 
-    watermark: Watermark | None = None
-    if watermark_config.strategy is not None:
-        bitmap = PersistentBitmap(
-            watermark_config.vocab_size,
-            watermark_config.bitmap_path,
-            device=expr_config.bitmap_device,
-        )
-        watermark = Watermark(watermark_config, bitmap)
+    watermark: BaseWatermark | None = build_watermark(
+        watermark_config,
+        bitmap_device=expr_config.bitmap_device,
+        mask_id=126336,
+    )
 
     model = (
         AutoModel.from_pretrained(

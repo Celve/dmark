@@ -5,6 +5,14 @@ from typing import Optional
 from pydantic import BaseModel
 
 from dmark.watermark.config import WatermarkConfig
+from dmark.watermark.persistent_bitmap import PersistentBitmap
+from dmark.watermark.watermark.base import BaseWatermark
+from dmark.watermark.watermark.bidirectional import BidirectionalWatermark
+from dmark.watermark.watermark.kgw import KGWWatermark
+from dmark.watermark.watermark.predictive import PredictiveWatermark
+from dmark.watermark.watermark.predictive_bidirectional import (
+    PredictiveBidirectionalWatermark,
+)
 
 
 class GenConfig(BaseModel):
@@ -359,3 +367,48 @@ def generate_dream_result_filename(
     if gen_config.top_k is not None:
         base.append(f"top_k{gen_config.top_k}")
     return _finalize_filename_components(base, watermark_config, expr_config, 152064)
+
+
+_WATERMARK_CLASS_MAP: dict[str, type[BaseWatermark]] = {
+    "normal": KGWWatermark,
+    "predict": PredictiveWatermark,
+    "bidirectional": BidirectionalWatermark,
+    "predict-bidirectional": PredictiveBidirectionalWatermark,
+}
+
+
+def build_watermark(
+    watermark_config: WatermarkConfig,
+    *,
+    bitmap_device: str,
+    mask_id: int,
+) -> BaseWatermark | None:
+    """Instantiate the requested watermark class for generation pipelines.
+
+    Args:
+        watermark_config: User provided watermark configuration.
+        bitmap_device: Device where the persistent bitmap should be kept.
+        mask_id: Mask token id used by the generator (needed for BaseWatermark).
+
+    Returns:
+        A concrete ``BaseWatermark`` implementation or ``None`` when watermarking
+        is disabled.
+    """
+
+    strategy = watermark_config.strategy
+    if strategy is None:
+        return None
+
+    watermark_cls = _WATERMARK_CLASS_MAP.get(strategy)
+    if watermark_cls is None:
+        raise ValueError(
+            "Unsupported watermark strategy "
+            f"'{strategy}'. Legacy strategies must use the legacy pipeline."
+        )
+
+    bitmap = PersistentBitmap(
+        watermark_config.vocab_size,
+        watermark_config.bitmap_path,
+        device=bitmap_device,
+    )
+    return watermark_cls(watermark_config, bitmap, mask_id)

@@ -1,16 +1,15 @@
-from typing import Optional
+from typing import Dict, Optional
 
 import torch
 
-from dmark.watermark.config import WatermarkConfig
 from dmark.watermark.persistent_bitmap import PersistentBitmap
-from dmark.watermark.watermark.base import BaseWatermark
+from dmark.watermark.kgw import KGWWatermark
 
 
-class BidirectionalWatermark(BaseWatermark):
-    def __init__(self, watermark_config: WatermarkConfig, bitmap: PersistentBitmap, mask_id: int):
-        super().__init__(watermark_config, mask_id)
-        self.bitmap = bitmap
+class BidirectionalWatermark(KGWWatermark):
+    def __init__(self, watermark_config: Dict[str, object], bitmap: PersistentBitmap, mask_id: int):
+        # Reuse KGW validation and common fields (vocab_size, ratio, delta, key).
+        super().__init__(watermark_config, bitmap, mask_id)
 
     def _token_to_index(self, token: Optional[torch.Tensor | int]) -> Optional[int]:
         if token is None:
@@ -23,13 +22,13 @@ class BidirectionalWatermark(BaseWatermark):
         row = self.bitmap.get_row(token_index)
         non_blocking = row.device.type == "cpu" and template.device.type == "cuda"
         row = row.to(device=template.device, dtype=template.dtype, non_blocking=non_blocking)
-        return row * self.watermark_config.delta
+        return row * self.delta
 
     def _col_bias(self, token_index: int, template: torch.Tensor) -> torch.Tensor:
         col = self.bitmap.get_col(token_index)
         non_blocking = col.device.type == "cpu" and template.device.type == "cuda"
         col = col.to(device=template.device, dtype=template.dtype, non_blocking=non_blocking)
-        return col * self.watermark_config.delta
+        return col * self.delta
 
     def apply_single(
         self,
@@ -109,6 +108,6 @@ class BidirectionalWatermark(BaseWatermark):
         row_bias = row_rows * prev_valid.unsqueeze(-1).to(device=device, dtype=logits.dtype)
         col_bias = col_rows * next_valid.unsqueeze(-1).to(device=device, dtype=logits.dtype)
 
-        bias = (row_bias + col_bias) * self.watermark_config.delta
+        bias = (row_bias + col_bias) * self.delta
         biased_logits[:, start_index:end_index] += bias
         return biased_logits

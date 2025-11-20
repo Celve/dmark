@@ -31,7 +31,7 @@ from transformers.utils import (
     logging,
 )
 
-from dmark.watermark.watermark.base import BaseWatermark
+from dmark.watermark.base import BaseWatermark
 
 logger = logging.get_logger(__name__)
 

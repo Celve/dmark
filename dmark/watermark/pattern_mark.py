@@ -1,36 +1,54 @@
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Tuple, Union
+
 import hashlib
 import hmac
 import math
 import random
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import torch
-from dmark.watermark.config import WatermarkConfig
-from dmark.watermark.watermark.base import BaseWatermark
+from scipy.stats import norm
+
+from dmark.watermark.base import BaseWatermark, EOS_TOKENS, validate_config_dict
 
 Token = Union[int, str]
 
+
 @dataclass
 class DetectionResult:
-    is_watermarked: bool
-    p_value: float          # false-positive probability
-    count: int              # number of alternating windows observed
-    count_support: int      # total number of length-m windows = n - m + 1
+    is_watermarked: bool          # whether the sequence is flagged as watermarked
+    p_value: float                # false-positive probability
+    count: int                    # number of alternating windows observed
+    count_support: int            # total number of length-m windows = n - m + 1
     threshold_fpr: float
     details: Dict[str, object]
+
 
 class PatternMark(BaseWatermark):
     """
     Simplified PATTERN-MARK (two-bucket, alternating only).
     """
 
-    def __init__(self, watermark_config: WatermarkConfig, mask_id: int):
-        super().__init__(watermark_config, mask_id)
-        self.m = watermark_config.pattern_length
-        self.secret_key = str(watermark_config.key).encode("utf-8")
-        self.vocab_size = watermark_config.vocab_size
+    def __init__(self, watermark_config: Dict[str, object], mask_id: int):
+        cfg = validate_config_dict(
+            watermark_config,
+            required={
+                "vocab_size": (int,),
+                "key": (int,),
+                "pattern_length": (int,),
+                "delta": (float, int),
+            },
+            context="PatternMark",
+        )
+
+        super().__init__(cfg, mask_id)
+        self.m = int(cfg["pattern_length"])
+        self.key = int(cfg["key"])
+        self.secret_key = str(self.key).encode("utf-8")
+        self.vocab_size = int(cfg["vocab_size"])
+        self.delta = float(cfg["delta"])
+        self.strategy = cfg.get("strategy", "pattern-mark")
         
         # Deterministic PRF-based split into 2 buckets using HMAC-SHA256 % 2
         # We precompute this for all tokens and store as a tensor for efficient access on GPU
@@ -45,10 +63,10 @@ class PatternMark(BaseWatermark):
         self._rng = random.Random(seed)
         
         # Fixed first key for apply_single compatibility
-        # In a real scenario we might want this to be random per sequence, 
+        # In a real scenario we might want this to be random per sequence,
         # but apply_single doesn't give us sequence ID.
         # We use a deterministic first key based on the config key.
-        self.first_key = 0 if (watermark_config.key % 2) == 0 else 1
+        self.first_key = 0 if (self.key % 2) == 0 else 1
 
     def _get_buckets(self, device):
         if self.buckets.device != device:
@@ -72,10 +90,10 @@ class PatternMark(BaseWatermark):
         # Add delta to logits where bucket matches key
         # buckets == key gives a boolean mask
         mask = (buckets == key)
-        
+
         biased_logits = curr_logits.clone()
-        biased_logits[mask] += self.watermark_config.delta
-        
+        biased_logits[mask] += self.delta
+
         return torch.argmax(biased_logits)
 
     def apply_range(
@@ -104,15 +122,15 @@ class PatternMark(BaseWatermark):
         
         # Create mask
         mask = (buckets_expanded == keys_expanded)
-        
+
         # Apply bias
-        bias = mask.float() * self.watermark_config.delta
+        bias = mask.float() * self.delta
         biased_logits[:, start_index:end_index] += bias
         
         return biased_logits
 
-    # ---------- detector (alternating only) ----------
-    def detect(self, sequence: Sequence[Token], fpr_threshold: float = 1e-3) -> DetectionResult:
+    # ---------- detector (alternating only, sequence-level) ----------
+    def detect_sequence(self, sequence: Sequence[Token], fpr_threshold: float = 1e-3) -> DetectionResult:
         """
         Counts length-m alternating windows in the recovered key stream and
         computes an exact p-value under the null (uniform, independent bits).
@@ -152,6 +170,63 @@ class PatternMark(BaseWatermark):
             threshold_fpr=fpr_threshold,
             details={"n": n, "m": m, "keys_recovered": keys, "PTn": PTn},
         )
+
+    def detect(self, tokens: torch.Tensor, prompt_len: int) -> Dict[str, object]:
+        """Detect PATTERN-MARK watermark and return (rate, z-score).
+
+        We first run the exact alternating-window detector to obtain the
+        upper-tail probability (p-value) for observing at least the given
+        number of alternating windows. The z-score is then defined as the
+        standard-normal quantile corresponding to this upper-tail probability,
+        i.e. z such that P(Z >= z) = p_value, Z ~ N(0, 1).
+        """
+        if tokens.ndim != 1:
+            raise ValueError(
+                f"detect expects a 1D tensor of token ids, got shape {tuple(tokens.shape)}"
+            )
+
+        # Extract generated portion and stop at EOS
+        seq: List[int] = []
+        for index in range(prompt_len, tokens.shape[0]):
+            curr_token = int(tokens[index].item())
+            if curr_token in EOS_TOKENS:
+                break
+            seq.append(curr_token)
+
+        if not seq:
+            # No usable tokens – behave like the null with p=1
+            return {
+                "p_value": 1.0,
+                "count": 0,
+                "count_support": 0,
+                "threshold_fpr": 1e-3,
+                "is_watermarked": False,
+                "strategy": self.strategy,
+            }
+
+        result = self.detect_sequence(seq)
+        support = result.count_support
+        if support <= 0:
+            return {
+                "p_value": float(result.p_value),
+                "count": result.count,
+                "count_support": support,
+                "threshold_fpr": result.threshold_fpr,
+                "is_watermarked": result.is_watermarked,
+                "strategy": self.strategy,
+            }
+
+        # Use exact upper-tail probability from the discrete null
+        p_value = float(result.p_value)
+
+        return {
+            "p_value": p_value,
+            "count": result.count,
+            "count_support": support,
+            "threshold_fpr": result.threshold_fpr,
+            "is_watermarked": result.is_watermarked,
+            "strategy": self.strategy,
+        }
 
     # ---------- optimized DP for two-key alternating target (only path kept) ----------
     @staticmethod

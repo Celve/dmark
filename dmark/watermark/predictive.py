@@ -1,16 +1,14 @@
-from typing import Optional
+from typing import Dict, Optional
 
 import torch
 
-from dmark.watermark.config import WatermarkConfig
 from dmark.watermark.persistent_bitmap import PersistentBitmap
-from dmark.watermark.watermark.base import BaseWatermark
+from dmark.watermark.kgw import KGWWatermark
 
 
-class PredictiveWatermark(BaseWatermark):
-    def __init__(self, watermark_config: WatermarkConfig, bitmap: PersistentBitmap, mask_id: int):
-        super().__init__(watermark_config, mask_id)
-        self.bitmap = bitmap
+class PredictiveWatermark(KGWWatermark):
+    def __init__(self, watermark_config: Dict[str, object], bitmap: PersistentBitmap, mask_id: int):
+        super().__init__(watermark_config, bitmap, mask_id)
 
     def _token_to_index(self, token: Optional[torch.Tensor | int]) -> Optional[int]:
         if token is None:
@@ -34,7 +32,7 @@ class PredictiveWatermark(BaseWatermark):
         row = self.bitmap.get_row(token_index)
         non_blocking = row.device.type == "cpu" and template.device.type == "cuda"
         row = row.to(device=template.device, dtype=template.dtype, non_blocking=non_blocking)
-        return row * self.watermark_config.delta
+        return row * self.delta
 
     def apply_single(
         self,
@@ -74,6 +72,6 @@ class PredictiveWatermark(BaseWatermark):
 
         non_blocking = rows.device.type == "cpu" and logits.device.type == "cuda"
         rows = rows.to(device=logits.device, dtype=logits.dtype, non_blocking=non_blocking)
-        bias = rows * self.watermark_config.delta
+        bias = rows * self.delta
         biased_logits[:, start_index:end_index] += bias
         return biased_logits

@@ -2,17 +2,15 @@ import argparse
 import datetime
 from typing import Optional
 
+from dmark.watermark.pattern_mark import PatternMark
 from pydantic import BaseModel
 
-from dmark.watermark.config import WatermarkConfig
 from dmark.watermark.persistent_bitmap import PersistentBitmap
-from dmark.watermark.watermark.base import BaseWatermark
-from dmark.watermark.watermark.bidirectional import BidirectionalWatermark
-from dmark.watermark.watermark.kgw import KGWWatermark
-from dmark.watermark.watermark.predictive import PredictiveWatermark
-from dmark.watermark.watermark.predictive_bidirectional import (
-    PredictiveBidirectionalWatermark,
-)
+from dmark.watermark.base import BaseWatermark
+from dmark.watermark.bidirectional import BidirectionalWatermark
+from dmark.watermark.kgw import KGWWatermark
+from dmark.watermark.predictive import PredictiveWatermark
+from dmark.watermark.predictive_bidirectional import PredictiveBidirectionalWatermark
 
 
 class GenConfig(BaseModel):
@@ -111,8 +109,7 @@ def parse_args():
             "predict",
             "bidirectional",
             "predict-bidirectional",
-            "legacy-ahead",
-            "legacy-both",
+            "pattern-mark",
         ],
     )
     parser.add_argument("--bitmap", type=str, default="bitmap.bin")
@@ -127,7 +124,12 @@ def parse_args():
     parser.add_argument("--ratio", type=float, default=0.5)
     parser.add_argument("--delta", type=float, default=2.0)
     parser.add_argument("--key", type=int, default=42)
-    parser.add_argument("--prebias", type=bool, default=False)
+    parser.add_argument(
+        "--pattern_length",
+        type=int,
+        default=8,
+        help="Pattern length for pattern-mark watermarking",
+    )
 
     args = parser.parse_args()
 
@@ -142,15 +144,15 @@ def parse_args():
         remasking=args.remasking,
     )
 
-    watermark_config = WatermarkConfig(
-        vocab_size=args.vocab_size,
-        ratio=args.ratio,
-        delta=args.delta,
-        key=args.key,
-        prebias=args.prebias,
-        strategy=args.strategy,
-        bitmap_path=args.bitmap,
-    )
+    watermark_config: dict[str, object] = {
+        "vocab_size": args.vocab_size,
+        "ratio": args.ratio,
+        "delta": args.delta,
+        "key": args.key,
+        "strategy": args.strategy,
+        "bitmap_path": args.bitmap,
+        "pattern_length": args.pattern_length,
+    }
 
     expr_config = ExprConfig(
         num_samples=args.num_samples,
@@ -229,7 +231,7 @@ def parse_dream_args():
         "--strategy",
         type=str,
         default=None,
-        choices=["normal", "predict", "bidirectional", "predict-bidirectional"],
+        choices=["normal", "predict", "bidirectional", "predict-bidirectional", "pattern-mark"],
     )
     parser.add_argument("--bitmap", type=str, default="bitmap.bin")
     parser.add_argument(
@@ -243,7 +245,12 @@ def parse_dream_args():
     parser.add_argument("--ratio", type=float, default=0.5)
     parser.add_argument("--delta", type=float, default=2.0)
     parser.add_argument("--key", type=int, default=42)
-    parser.add_argument("--prebias", type=bool, default=False)
+    parser.add_argument(
+        "--pattern_length",
+        type=int,
+        default=8,
+        help="Pattern length for pattern-mark watermarking",
+    )
 
     args = parser.parse_args()
 
@@ -262,15 +269,15 @@ def parse_dream_args():
         return_dict_in_generate=args.return_dict_in_generate,
     )
 
-    watermark_config = WatermarkConfig(
-        vocab_size=args.vocab_size,
-        ratio=args.ratio,
-        delta=args.delta,
-        key=args.key,
-        prebias=args.prebias,
-        strategy=args.strategy,
-        bitmap_path=args.bitmap,
-    )
+    watermark_config: dict[str, object] = {
+        "vocab_size": args.vocab_size,
+        "ratio": args.ratio,
+        "delta": args.delta,
+        "key": args.key,
+        "strategy": args.strategy,
+        "bitmap_path": args.bitmap,
+        "pattern_length": args.pattern_length,
+    }
 
     expr_config = DreamExprConfig(
         num_samples=args.num_samples,
@@ -287,25 +294,25 @@ def parse_dream_args():
 
 def _finalize_filename_components(
     base_components: list[str],
-    watermark_config: WatermarkConfig,
+    watermark_config: dict[str, object],
     expr_config: BaseModel,
     vocab_default: int,
 ) -> str:
     components = list(base_components)
-    if watermark_config.strategy is not None:
+    strategy = watermark_config.get("strategy")
+    if strategy is not None:
         components.append("wm")
         components.extend(
             [
-                f"r{watermark_config.ratio}",
-                f"d{watermark_config.delta}",
-                f"k{watermark_config.key}",
-                watermark_config.strategy,
+                f"r{watermark_config.get('ratio')}",
+                f"d{watermark_config.get('delta')}",
+                f"k{watermark_config.get('key')}",
+                strategy,
             ]
         )
-        if getattr(watermark_config, "prebias", False):
-            components.append("prebias")
-        if watermark_config.vocab_size != vocab_default:
-            components.append(f"v{watermark_config.vocab_size}")
+        vocab_size = watermark_config.get("vocab_size", vocab_default)
+        if vocab_size != vocab_default:
+            components.append(f"v{vocab_size}")
     else:
         components.append("nowm")
 
@@ -325,7 +332,7 @@ def _finalize_filename_components(
 
 def generate_result_filename(
     gen_config: GenConfig,
-    watermark_config: WatermarkConfig,
+    watermark_config: dict[str, object],
     expr_config: ExprConfig,
 ) -> str:
     model_name = gen_config.model.split("/")[-1]
@@ -345,7 +352,7 @@ def generate_result_filename(
 
 def generate_dream_result_filename(
     gen_config: DreamGenConfig,
-    watermark_config: WatermarkConfig,
+    watermark_config: dict[str, object],
     expr_config: DreamExprConfig,
 ) -> str:
     model_name = gen_config.model.split("/")[-1]
@@ -378,7 +385,7 @@ _WATERMARK_CLASS_MAP: dict[str, type[BaseWatermark]] = {
 
 
 def build_watermark(
-    watermark_config: WatermarkConfig,
+    watermark_config: dict[str, object],
     *,
     bitmap_device: str,
     mask_id: int,
@@ -386,7 +393,7 @@ def build_watermark(
     """Instantiate the requested watermark class for generation pipelines.
 
     Args:
-        watermark_config: User provided watermark configuration.
+        watermark_config: User provided watermark configuration as a plain dict.
         bitmap_device: Device where the persistent bitmap should be kept.
         mask_id: Mask token id used by the generator (needed for BaseWatermark).
 
@@ -395,20 +402,20 @@ def build_watermark(
         is disabled.
     """
 
-    strategy = watermark_config.strategy
+    strategy = watermark_config.get("strategy")
     if strategy is None:
         return None
 
+    if strategy == "pattern-mark":
+        return PatternMark(watermark_config, mask_id)
+
     watermark_cls = _WATERMARK_CLASS_MAP.get(strategy)
     if watermark_cls is None:
-        raise ValueError(
-            "Unsupported watermark strategy "
-            f"'{strategy}'. Legacy strategies must use the legacy pipeline."
-        )
+        raise ValueError(f"Unsupported watermark strategy '{strategy}'.")
 
     bitmap = PersistentBitmap(
-        watermark_config.vocab_size,
-        watermark_config.bitmap_path,
+        watermark_config["vocab_size"],
+        watermark_config["bitmap_path"],
         device=bitmap_device,
     )
     return watermark_cls(watermark_config, bitmap, mask_id)

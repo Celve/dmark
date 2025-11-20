@@ -1,18 +1,33 @@
-from typing import Optional
+import math
+from typing import Any, Dict, Optional
 
 import torch
 
-from dmark.watermark.config import WatermarkConfig
+from dmark.watermark.base import BaseWatermark, validate_config_dict
 from dmark.watermark.persistent_bitmap import PersistentBitmap
-from dmark.watermark.watermark.base import BaseWatermark
 
 
 class KGWWatermark(BaseWatermark):
     """Classic KGW watermarking equivalent to the legacy "normal" strategy."""
 
-    def __init__(self, watermark_config: WatermarkConfig, bitmap: PersistentBitmap, mask_id: int):
-        super().__init__(watermark_config, mask_id)
+    def __init__(self, watermark_config: Dict[str, Any], bitmap: PersistentBitmap, mask_id: int):
+        cfg = validate_config_dict(
+            watermark_config,
+            required={
+                "vocab_size": (int,),
+                "ratio": (float, int),
+                "delta": (float, int),
+                "key": (int,),
+            },
+            context="KGWWatermark",
+        )
+
+        super().__init__(cfg, mask_id)
         self.bitmap = bitmap
+        self.vocab_size = int(cfg["vocab_size"])
+        self.ratio = float(cfg["ratio"])
+        self.delta = float(cfg["delta"])
+        self.key = int(cfg["key"])
 
     def _token_to_index(self, token: Optional[torch.Tensor | int]) -> Optional[int]:
         if token is None:
@@ -25,7 +40,7 @@ class KGWWatermark(BaseWatermark):
         row = self.bitmap.get_row(token_index)
         non_blocking = row.device.type == "cpu" and template.device.type == "cuda"
         row = row.to(device=template.device, dtype=template.dtype, non_blocking=non_blocking)
-        return row * self.watermark_config.delta
+        return row * self.delta
 
     def apply_single(
         self,
@@ -68,7 +83,37 @@ class KGWWatermark(BaseWatermark):
         non_blocking = rows.device.type == "cpu" and logits.device.type == "cuda"
         rows = rows.to(device=logits.device, dtype=logits.dtype, non_blocking=non_blocking)
         mask = valid_mask.unsqueeze(-1).to(device=logits.device, dtype=logits.dtype)
-        bias = rows * mask * self.watermark_config.delta
+        bias = rows * mask * self.delta
         biased_logits[:, start_index:end_index] += bias
 
         return biased_logits
+
+    def detect(self, tokens: torch.Tensor, prompt_len: int) -> Dict[str, Any]:
+        detected = 0
+        gen_len = 0
+
+        for index in range(prompt_len, tokens.shape[0]):
+            prev_token = tokens[index - 1]
+            curr_token = tokens[index]
+            if curr_token == 126081 or curr_token == 126348:
+                break
+            if self.bitmap.get_row(prev_token)[curr_token.item()]:
+                detected += 1
+            gen_len += 1
+        if gen_len == 0:
+            return {
+                "detection_rate": 0.0,
+                "z_score": 0.0,
+            }
+
+        detection_rate = detected / gen_len
+        expected = gen_len * self.ratio
+        variance = gen_len * self.ratio * (1.0 - self.ratio)
+        if variance <= 0.0:
+            z_score = 0.0
+        else:
+            z_score = (detected - expected) / math.sqrt(variance)
+        return {
+            "detection_rate": detection_rate,
+            "z_score": z_score,
+        }

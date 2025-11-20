@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from dmark.watermark.watermark.base import BaseWatermark
+from dmark.watermark.base import BaseWatermark
 
 
 def add_gumbel_noise(logits, temperature):
@@ -48,11 +48,11 @@ def get_num_transfer_tokens(mask_index, steps):
 
     return num_transfer_tokens
 
-def apply_single_watermark(x, x0, mask_id, logits_with_noise, logits_with_watermark, batch_index, index, watermark: Optional[BaseWatermark]): 
+def apply_single_watermark(x, x0, mask_id, logits_with_noise, batch_index, index, watermark: Optional[BaseWatermark]): 
     if watermark is None:
         return
     if x[batch_index, index - 1] == mask_id:
-        prev_logits = logits_with_watermark[batch_index, index - 1]
+        prev_logits = logits_with_noise[batch_index, index - 1]
         prev_token = None
     else:
         prev_logits = None
@@ -61,7 +61,7 @@ def apply_single_watermark(x, x0, mask_id, logits_with_noise, logits_with_waterm
         next_logits = None
         next_token = None
     elif x[batch_index, index + 1] == mask_id:
-        next_logits = logits_with_watermark[batch_index, index + 1]
+        next_logits = logits_with_noise[batch_index, index + 1]
         next_token = None
     else:
         next_logits = None
@@ -74,20 +74,6 @@ def apply_single_watermark(x, x0, mask_id, logits_with_noise, logits_with_waterm
         next_token,
         index=index,
     )
-
-def apply_ranged_watermark(x, mask_id, logits_with_noise, start_index, end_index, watermark: Optional[BaseWatermark]) -> torch.Tensor: 
-    if watermark is not None and watermark.watermark_config.prebias:
-        logits_todo = watermark.apply_range(
-            x,
-            logits_with_noise,
-            start_index,
-            end_index,
-        )
-    else:
-        logits_todo = logits_with_noise
-    return logits_todo
-
-
 
 @torch.no_grad()
 def generate(
@@ -161,9 +147,6 @@ def generate(
             logits_with_noise = add_gumbel_noise(logits, temperature=temperature)
 
             _mask_blocked_tokens(logits_with_noise, suppressed_token_tensor)
-            
-            logits_with_watermark = apply_ranged_watermark(x, mask_id, logits_with_noise, prompt.shape[1] + num_block * block_length, prompt.shape[1] + (num_block + 1) * block_length, watermark)
-            _mask_blocked_tokens(logits_with_watermark, suppressed_token_tensor)
 
             x0 = torch.argmax(logits_with_noise, dim=-1) # b, l
             
@@ -188,7 +171,7 @@ def generate(
             for j in range(confidence.shape[0]):
                 _, select_index = torch.topk(confidence[j], k=num_transfer_tokens[j, i])
                 for index in select_index:
-                    apply_single_watermark(x, x0, mask_id, logits_with_noise, logits_with_watermark, j, index, watermark)
+                    apply_single_watermark(x, x0, mask_id, logits_with_noise, j, index, watermark)
                 transfer_index[j, select_index] = True
             x[transfer_index] = x0[transfer_index]
 

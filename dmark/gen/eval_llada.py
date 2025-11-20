@@ -18,8 +18,7 @@ from dmark.gen.utils import (
     generate_result_filename,
     parse_args,
 )
-from dmark.watermark.config import WatermarkConfig
-from dmark.watermark.watermark.base import BaseWatermark
+from dmark.watermark.base import BaseWatermark
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -88,7 +87,7 @@ def _tensor_to_1d_cpu(tensor: torch.Tensor) -> torch.Tensor:
 
 def run_generation(
     gen_config: GenConfig,
-    watermark_config: WatermarkConfig,
+    watermark_config: dict[str, object],
     expr_config: ExprConfig,
 ) -> list[dict[str, Any]]:
     tokenizer = _prepare_tokenizer(gen_config.model)
@@ -212,8 +211,8 @@ def run_generation(
                     "num_output_tokens": num_output_tokens,
                 },
                 "generation_metadata": gen_config.model_dump(),
-                "watermark_metadata": watermark_config.model_dump()
-                if watermark_config.strategy is not None
+                "watermark_metadata": dict(watermark_config)
+                if watermark_config.get("strategy") is not None
                 else None,
                 "expr_metadata": expr_config.model_dump(),
             }

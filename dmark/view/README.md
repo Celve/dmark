@@ -70,3 +70,12 @@ Usage:
 python -m dmark.view.fpr --input results_dir --quantiles 0.999 0.99 --output thresholds.json
 python -m dmark.view.fpr --input single_results.json
 ```
+
+### tpr.py
+
+Takes the FPR JSON (from `fpr.py`) and a watermarked results file/dir, then reports TPRs using matching generation configs. For each quantile `q`, it uses the stored `q{q}` threshold and prints the fraction of samples with z-scores above it (e.g., `tpr@fpr1.000%` for `q=0.99`).
+
+Usage:
+```bash
+python -m dmark.view.tpr --fpr-json thresholds.json --input watermarked_dir --quantiles 0.99 0.999
+```

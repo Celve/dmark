@@ -3,20 +3,25 @@
 import argparse
 import json
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from dmark.view.process import process_dir, process_file
 
 
+def _gen_key(gen_meta: dict | None) -> str:
+    return json.dumps(gen_meta or {}, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+def _wm_key(wm_meta: dict | None) -> str:
+    return json.dumps(wm_meta or {}, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
 def load_fpr_stats(path: Path) -> Dict[str, dict]:
+    """Index FPR thresholds by generation metadata only (consistent with fpr.py)."""
     with path.open("r") as f:
         data = json.load(f)
-    stats = {}
+    stats: Dict[str, dict] = {}
     for entry in data:
-        meta = entry.get("generation_metadata")
-        if meta is None:
-            continue
-        key = json.dumps(meta, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        raw_gen = entry.get("generation_metadata") or {}
+        key = _gen_key(raw_gen if isinstance(raw_gen, dict) else {})
         stats[key] = entry
     return stats
 
@@ -31,15 +36,12 @@ def extract_scores(instance: dict) -> List[float]:
     return scores
 
 
-def key_from_instance(instance: dict) -> str | None:
+def instance_key(instance: dict) -> Optional[str]:
     gen = instance.get("generation_metadata")
     wm = instance.get("watermark_metadata")
-    if isinstance(gen, dict) and gen:
-        key_obj = {"generation_metadata": gen}
-        if isinstance(wm, dict):
-            key_obj["watermark_metadata"] = wm
-        return json.dumps(key_obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    return None
+    if not gen and not wm:
+        return None
+    return _gen_key(gen) + _wm_key(wm)
 
 
 def parse_args() -> argparse.Namespace:
@@ -63,31 +65,48 @@ def main():
     fpr_stats = load_fpr_stats(args.fpr_json)
 
     def aggregate(instance: dict):
-        k = key_from_instance(instance)
+        k = instance_key(instance)
         if k is None:
             return None
-        return k, extract_scores(instance)
+        return (
+            k,
+            extract_scores(instance),
+            instance.get("generation_metadata") or {},
+            instance.get("watermark_metadata") or {},
+        )
 
     if args.input.is_dir():
         mapping = process_dir(args.input, aggregate)
     else:
         mapping = {args.input: process_file(args.input, aggregate)}
 
-    # Collect scores grouped by generation config key
-    grouped: Dict[str, List[float]] = {}
-    for _, results in mapping.items():
-        for pair in results:
-            if not pair:
-                continue
-            key, scores = pair
-            if key is None or not scores:
-                continue
-            grouped.setdefault(key, []).extend(scores)
+    # grouped by watermark key, collecting scores and last seen generation metadata for display
+    grouped_scores: Dict[str, List[float]] = {}
+    grouped_gen: Dict[str, dict] = {}
+    grouped_wm: Dict[str, dict] = {}
 
-    for key, scores in grouped.items():
-        if key not in fpr_stats:
+    for _, results in mapping.items():
+        for record in results:
+            if not record:
+                continue
+            k, scores, gen_meta, wm_meta = record
+            if k is None or not scores:
+                continue
+            grouped_scores.setdefault(k, []).extend(scores)
+            if isinstance(gen_meta, dict):
+                grouped_gen[k] = gen_meta
+            if isinstance(wm_meta, dict):
+                grouped_wm[k] = wm_meta
+
+    for key, scores in grouped_scores.items():
+        gen_meta = grouped_gen.get(key, {})
+        wm_meta = grouped_wm.get(key, {})
+        gen_key = _gen_key(gen_meta)
+
+        if gen_key not in fpr_stats:
             continue  # no matching FPR baseline; skip
-        entry = fpr_stats[key]
+
+        entry = fpr_stats[gen_key]
         total = len(scores)
         if total == 0:
             continue
@@ -100,7 +119,7 @@ def main():
             tpr = sum(1 for s in scores if s >= thresh) / total
             parts.append(f"tpr@fpr{(1-q)*100:.3f}%={tpr:.3f}")
         if parts:
-            print(f"{json.loads(key)}: " + ", ".join(parts))
+            print(f"gen={gen_meta}, wm={wm_meta}: " + ", ".join(parts))
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ from dmark.view.process import process_dir, process_file
 
 
 def _extract_scores(result: dict) -> list[float]:
-    wm = result.get("watermark") or result.get("watermark_metadata") or {}
+    wm = result.get("watermark_detection") or result.get("watermark_metadata") or {}
     scores = []
     for field in ("z_score_original", "z_score_truncated", "z_score_attacked", "z_score"):
         val = wm.get(field)

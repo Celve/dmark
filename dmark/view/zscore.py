@@ -3,7 +3,7 @@
 import argparse
 from pathlib import Path
 
-from dmark.view.process import process_file
+from dmark.view.process import process_dir, process_file
 
 
 def _extract_scores(result: dict) -> list[float]:
@@ -16,34 +16,32 @@ def _extract_scores(result: dict) -> list[float]:
     return scores
 
 
-def _collect_scores(file_path: Path) -> list[float]:
-    collected: list[float] = []
-
-    def aggregate(instance: dict):
-        collected.extend(_extract_scores(instance))
-
-    process_file(file_path, aggregate)
-    return collected
-
-
 def main():
     parser = argparse.ArgumentParser(description="Print average z-score per file.")
     parser.add_argument("--input", type=Path, required=True, help="JSON file or directory of JSON files.")
     args = parser.parse_args()
 
-    paths: list[Path]
-    if args.input.is_dir():
-        paths = [p for p in args.input.iterdir() if p.is_file() and p.suffix == ".json"]
-    else:
-        paths = [args.input]
+    def aggregate(instance: dict) -> list[float]:
+        return _extract_scores(instance)
 
-    for path in sorted(paths):
-        scores = _collect_scores(path)
+    if args.input.is_dir():
+        mapping = process_dir(args.input, aggregate)
+        items = sorted(mapping.items(), key=lambda x: x[0].name)
+    else:
+        mapping = {args.input: process_file(args.input, aggregate)}
+        items = mapping.items()
+
+    for path, chunks in items:
+        # chunks is a list of lists of floats; flatten
+        scores: list[float] = []
+        for chunk in chunks:
+            if chunk:
+                scores.extend(chunk)
         if not scores:
             print(f"{path.name}: n/a")
-            continue
-        avg = sum(scores) / len(scores)
-        print(f"{path.name}: {avg:.3f}")
+        else:
+            avg = sum(scores) / len(scores)
+            print(f"{path.name}: {avg:.3f}")
 
 
 if __name__ == "__main__":

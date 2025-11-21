@@ -25,7 +25,7 @@ Key flags (`python -m dmark.watermark.preprocess`):
 For LLaDA:
 
 ```bash
-python -m dmark.watermark.preprocess \
+python -m dmark.watermark.persistent_bitmap \
     --output_dir bitmaps/ \
     --vocab_size 126464 \
     --ratio 0.5 \
@@ -37,7 +37,7 @@ python -m dmark.watermark.preprocess \
 For DREAM 7B:
 
 ```bash
-python -m dmark.watermark.preprocess \
+python -m dmark.watermark.persistent_bitmap \
     --output_dir bitmaps/ \
     --vocab_size 152064 \
     --ratio 0.5 \

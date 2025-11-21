@@ -33,8 +33,12 @@ def extract_scores(instance: dict) -> List[float]:
 
 def key_from_instance(instance: dict) -> str | None:
     gen = instance.get("generation_metadata")
+    wm = instance.get("watermark_metadata")
     if isinstance(gen, dict) and gen:
-        return json.dumps(gen, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        key_obj = {"generation_metadata": gen}
+        if isinstance(wm, dict):
+            key_obj["watermark_metadata"] = wm
+        return json.dumps(key_obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return None
 
 

@@ -51,8 +51,10 @@ def main():
             avg = sum(scores) / len(scores)
             parts = [f"avg={avg:.3f}"]
             for q in args.quantiles:
-                thresh = percentile(scores, q)
-                parts.append(f"q{q}={thresh:.3f}")
+                # Threshold such that q fraction are >= threshold => (1 - q) lower-tail percentile
+                lower_q = max(0.0, min(1.0, 1.0 - q))
+                thresh = percentile(scores, lower_q)
+                parts.append(f">={q:.3f}:{thresh:.3f}")
             print(f"{path.name}: " + ", ".join(parts))
 
 

@@ -2,13 +2,41 @@
 
 import argparse
 from pathlib import Path
+from typing import List
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from dmark.eval.process import process_dir, process_file
-from dmark.eval.ppl_legacy import PPLCalculator
 
+class PPLCalculator:
+    """Perplexity calculator for text quality analysis."""
+
+    def __init__(self, model, tokenizer, device='cuda') -> None:
+        """
+        Initialize the perplexity calculator.
+
+        Parameters:
+            model: The language model for perplexity calculation.
+            tokenizer: The tokenizer for the language model.
+            device (str): The device to use for the calculation.
+        """
+        self.model = model
+        self.tokenizer = tokenizer
+        self.device = device
+        self.criterion = torch.nn.CrossEntropyLoss()
+
+    def analyze_tokens(self, token_ids: List[int]) -> float:
+        """Calculate the perplexity of the given token IDs."""
+        if len(token_ids) < 2:
+            return float('inf')
+        
+        with torch.no_grad():
+            encoded_text = torch.tensor(token_ids, dtype=torch.long).to(self.device)
+            logits = self.model(torch.unsqueeze(encoded_text, 0), return_dict=True).logits[0]
+            loss = self.criterion(logits[:-1], encoded_text[1:])
+            ppl = torch.exp(loss)
+        return ppl.item()
 
 def _build_ppl_calculator(model_name: str, device: str) -> PPLCalculator:
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)

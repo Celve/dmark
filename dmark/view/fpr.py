@@ -4,27 +4,30 @@ import argparse
 import json
 from collections import defaultdict
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 from dmark.view.process import process_dir, process_file
 
 
 def _extract_scores(instance: dict) -> list[float]:
-    wm = instance.get("watermark") or instance.get("watermark_metadata") or {}
+    wm = instance.get("watermark_detection") or {}
     scores = []
-    for field in ("z_score_original", "z_score_truncated", "z_score_attacked", "z_score"):
-        val = wm.get(field)
-        if isinstance(val, (int, float)):
-            scores.append(float(val))
-    return scores
+    if instance.get("watermark_metadata") is None:
+        for field in ("z_score_original", "z_score_truncated", "z_score_attacked", "z_score"):
+            val = wm.get(field)
+            if isinstance(val, (int, float)):
+                scores.append(float(val))
+        return scores
+    else:
+        return []
 
 
-def _key_from_instance(instance: dict, fallback: str) -> str:
+def _key_from_instance(instance: dict) -> Optional[str]:
     gen = instance.get("generation_metadata")
     if isinstance(gen, dict) and gen:
         # Canonical, sorted string so identical configs collapse together
         return json.dumps(gen, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    return fallback
+    return None
 
 
 def _percentile(data: Iterable[float], q: float) -> float:
@@ -69,19 +72,16 @@ def main():
 
     def aggregate(instance: dict):
         # Return (key, scores) so process_* will collect them
-        return _key_from_instance(instance, fallback=current_file.stem), _extract_scores(instance)
+        return _key_from_instance(instance), _extract_scores(instance)
 
     if args.input.is_dir():
-        current_file = None  # placeholder
         mapping = process_dir(args.input, aggregate)
     else:
-        current_file = args.input
         mapping = {args.input: process_file(args.input, aggregate)}
 
     for path, results in mapping.items():
-        current_file = path
         for key, scores in results:
-            if scores:
+            if key is not None and scores:
                 groups[key].extend(scores)
 
     thresholds: dict[str, dict[str, float | int]] = {}

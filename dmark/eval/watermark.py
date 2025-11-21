@@ -72,7 +72,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", type=str, default="GSAI-ML/LLaDA-8B-Instruct", help="Tokenizer model name.")
     parser.add_argument("--mask-id", type=int, default=126336, help="Mask token id (passed to build_watermark).")
     parser.add_argument("--bitmap-device", type=str, default="cpu", choices=["cpu", "cuda"])
-    parser.add_argument("--bitmap-dir", type=Path, default=Path("."), help="Directory containing bitmap files.")
+    parser.add_argument("--bitmap-dir", type=Path, default=Path("./bitmaps"), help="Directory containing bitmap files.")
     parser.add_argument("--vocab_size", type=int, default=126464)
     parser.add_argument("--ratio", type=float, default=0.5)
     parser.add_argument("--delta", type=float, default=2.0)

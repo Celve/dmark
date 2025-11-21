@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from typing import Callable, Any, Iterable
 
+from tqdm import tqdm
+
 
 def _process_instance(instance: Any, transform: Callable[[dict], dict], insert_key: str) -> Any:
     if not isinstance(instance, dict):
@@ -36,7 +38,7 @@ def process_file(
 
     if isinstance(data, list):
         processed: Iterable[Any] = (
-            _process_instance(item, transform, insert_key) for item in data
+            _process_instance(item, transform, insert_key) for item in tqdm(data, desc=f"{input_path.name}")
         )
         data = list(processed)
     else:

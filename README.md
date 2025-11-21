@@ -2,7 +2,7 @@
 
 A watermarking system for diffusion-based large language models supporting LLaDA and DREAM models.
 
-> **Note:** Generation entrypoints now live under `dmark/gen`. The older `dmark/llada` directory is deprecated and kept only for backward compatibility.
+> **Note:** Generation entrypoints live under `dmark/gen`; the legacy `dmark/llada` scripts have been removed.
 
 ## Installation
 
@@ -62,10 +62,10 @@ _Use the refreshed drivers in `dmark/gen`. The legacy `dmark/llada` scripts rema
 - `--ignore_eos`: When set, logits for EOS/EoT are forced to `-inf` so sampling always runs the full `gen_length` window.
 
 **Watermark options**
-- `--strategy`: `normal`, `predict`, `bidirectional`, `predict-bidirectional` (LLaDA additionally accepts `legacy-ahead` / `legacy-both`).
-- `--bitmap`: Path to the `.bin` bitmap.
+- `--strategy`: `normal`, `predict`, `bidirectional`, `predict-bidirectional`, or `pattern-mark`.
+- `--bitmap`: Path to the `.bin` bitmap (not used for `pattern-mark`).
 - `--bitmap_device`: `cpu` or `cuda` placement for the bitmap tensor.
-- `--vocab_size`, `--ratio`, `--delta`, `--key`, `--prebias`: Hyperparameters passed straight into `WatermarkConfig`.
+- `--vocab_size`, `--ratio`, `--delta`, `--key`: Hyperparameters passed straight into the watermark config.
 
 **LLaDA-specific flags** (`parse_args` in `dmark/gen/utils.py`)
 - `--steps`: Total diffusion steps (split evenly across blocks).
@@ -168,7 +168,7 @@ Important flags (`python -m dmark.eval.zscore`):
 - `--input`: Single JSON file or directory; combine with `--increment` to skip already-tagged outputs.
 - `--output` / `--tag`: Control where `_zscore` files land.
 - `--bitmap_dir` / `--bitmap_device`: Where to look for `.bin` files and what device to keep them on.
-- Manual override knobs (`--vocab_size`, `--ratio`, `--delta`, `--key`, `--prebias`, `--strategy`, `--use_manual_config`) kick in when result files lack metadata.
+- Manual override knobs (`--vocab_size`, `--ratio`, `--delta`, `--key`, `--strategy`, `--use_manual_config`) kick in when result files lack metadata.
 - `--model`: Tokenizer to use when metadata is missing.
 - `--max_tokens`: Cap on tokens per sample (default 200).
 ```bash
@@ -176,7 +176,6 @@ python -m dmark.eval.zscore \
     --input results.json \
     --bitmap_dir bitmaps/ \
     --bitmap_device cpu \
-    --bitmap bitmaps/bitmap_v126464_r50_k42.bin \
     --model GSAI-ML/LLaDA-8B-Instruct
 ```
 
@@ -190,16 +189,24 @@ This allows comparison of watermark detection strength across different processi
 ### Text Quality (Perplexity)
 
 Key options (`python -m dmark.eval.ppl`):
-- `--input`: JSON file or directory (supports `--increment`).
-- `--output` / `--tag`: Control destination naming (defaults to `{input}_{tag}`).
-- `--model`: HF model name or local directory for perplexity evaluation.
-- `--device`: `cuda` or `cpu` (auto-falls back if CUDA is unavailable).
+- `--input`: JSON file or directory (supports `--increment` to skip existing tagged outputs).
+- `--output` / `--tag`: Destination naming (defaults to `<input>_<tag>`).
+- `--insert-key`: Where to place the `{ "perplexity": ... }` dict (default `text_quality`).
+- `--model`: HF model name for perplexity evaluation; `--device` chooses `auto|cpu|cuda`.
 ```bash
 python -m dmark.eval.ppl \
     --input results.json \
     --model meta-llama/Meta-Llama-3-8B-Instruct \
-    --device cuda
+    --device auto
 ```
+
+### Watermark Detect Annotation
+
+`python -m dmark.eval.watermark` attaches `detect()` outputs to result files using the same batch helper as `ppl`:
+- `--input`: JSON file or directory; `--output-dir` required when a directory is given.
+- `--bitmap-dir`: Folder containing `bitmap_v{vocab}_r{ratio*100}_k{key}.bin` (not needed for `pattern-mark`).
+- `--strategy`: `normal`, `predict`, `bidirectional`, `predict-bidirectional`, `pattern-mark`.
+- `--insert-key`: Field to store detection results (default `watermark_detection`).
 
 ### Robustness Testing (Attacks)
 
@@ -335,6 +342,9 @@ Features:
 
 ## Utility Tools
 
+### Batch JSON Processing Helper
+`dmark/eval/process.py` exposes `process_file` and `process_dir` for applying a callable to every JSON record and writing tagged outputs. Both `ppl.py` and `watermark.py` build on this helper; you can reuse it for custom per-sample transforms.
+
 ### Convert Threshold Results to CSV
 ```bash
 # Simple conversion (filename and thresholds only)
@@ -363,10 +373,10 @@ python utils/generate_experiments.py config.json --max-commands 10
   - `normal`: Uses previous token (i-1)
   - `predict`: Uses predicted tokens
   - `bidirectional`: Bidirectional (both prev and next)
+  - `pattern-mark`: Alternating bucket watermark (no bitmap required)
 - `--delta`: Watermark strength (1.0-10.0)
 - `--ratio`: Green list ratio (0.25, 0.5, 0.75)
 - `--key`: Hash key for randomization
-- `--prebias`: Apply watermark before token selection
 
 ### Generation (LLaDA)
 - `--steps`: Denoising steps (default: 256)

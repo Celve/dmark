@@ -78,10 +78,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ratio", type=float, default=0.5)
     parser.add_argument("--delta", type=float, default=2.0)
     parser.add_argument("--key", type=int, default=42)
-    parser.add_argument(
+    inc_group = parser.add_mutually_exclusive_group()
+    inc_group.add_argument(
         "--increment",
         action="store_true",
-        help="Skip writing output files that already exist (lazy mode).",
+        default=True,
+        help="Skip writing output files that already exist (lazy); default on.",
+    )
+    inc_group.add_argument(
+        "--no-increment",
+        action="store_false",
+        dest="increment",
+        help="Force processing even when output exists.",
     )
     parser.add_argument(
         "--strategy",

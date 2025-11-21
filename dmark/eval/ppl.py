@@ -85,10 +85,18 @@ def parse_args() -> argparse.Namespace:
         choices=["auto", "cpu", "cuda"],
         help="Computation device.",
     )
-    parser.add_argument(
+    inc_group = parser.add_mutually_exclusive_group()
+    inc_group.add_argument(
         "--increment",
         action="store_true",
-        help="Skip files whose tagged output already exists.",
+        default=True,
+        help="Skip files whose tagged output already exists (default: on).",
+    )
+    inc_group.add_argument(
+        "--no-increment",
+        action="store_false",
+        dest="increment",
+        help="Process files even if tagged outputs already exist.",
     )
     parser.add_argument(
         "--insert-key",

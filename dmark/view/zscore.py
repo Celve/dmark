@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from dmark.view.process import process_dir, process_file
+from dmark.view.fpr import percentile
 
 
 def _extract_scores(result: dict) -> list[float]:
@@ -19,6 +20,13 @@ def _extract_scores(result: dict) -> list[float]:
 def main():
     parser = argparse.ArgumentParser(description="Print average z-score per file.")
     parser.add_argument("--input", type=Path, required=True, help="JSON file or directory of JSON files.")
+    parser.add_argument(
+        "--quantiles",
+        type=float,
+        nargs="+",
+        default=[0.99, 0.999],
+        help="Quantiles to report (e.g., 0.99 0.999).",
+    )
     args = parser.parse_args()
 
     def aggregate(instance: dict) -> list[float]:
@@ -41,7 +49,11 @@ def main():
             print(f"{path.name}: n/a")
         else:
             avg = sum(scores) / len(scores)
-            print(f"{path.name}: {avg:.3f}")
+            parts = [f"avg={avg:.3f}"]
+            for q in args.quantiles:
+                thresh = percentile(scores, q)
+                parts.append(f"q{q}={thresh:.3f}")
+            print(f"{path.name}: " + ", ".join(parts))
 
 
 if __name__ == "__main__":

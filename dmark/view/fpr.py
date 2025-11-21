@@ -30,7 +30,7 @@ def _key_from_instance(instance: dict) -> Optional[str]:
     return None
 
 
-def _percentile(data: Iterable[float], q: float) -> float:
+def percentile(data: Iterable[float], q: float) -> float:
     values = sorted(data)
     if not values:
         raise ValueError("No data for percentile calculation")
@@ -90,7 +90,7 @@ def main():
             continue
         entry = {"count": len(scores)}
         for q in args.quantiles:
-            entry[f"q{q}"] = _percentile(scores, q)
+            entry[f"q{q}"] = percentile(scores, q)
         thresholds[key] = entry
 
     if args.output:

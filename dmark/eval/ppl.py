@@ -6,7 +6,7 @@ from pathlib import Path
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from dmark.eval.process import process_file
+from dmark.eval.process import process_dir, process_file
 from dmark.eval.ppl_legacy import PPLCalculator
 
 
@@ -47,7 +47,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model",
         type=str,
-        default="meta-llama/Meta-Llama-3-8B-Instruct",
+        default="Qwen/Qwen3-4B-Instruct-2507",
         help="HF model to compute perplexity.",
     )
     parser.add_argument(
@@ -77,22 +77,6 @@ def _resolve_device(device: str) -> str:
     return device
 
 
-def _process_dir(
-    input_dir: Path,
-    output_dir: Path,
-    transform,
-    insert_key: str,
-    tag: str,
-    increment: bool,
-):
-    output_dir.mkdir(parents=True, exist_ok=True)
-    for path in input_dir.iterdir():
-        if path.is_dir() or path.suffix != ".json" or path.name.startswith("_"):
-            continue
-        out_path = output_dir / f"{path.stem}_{tag}.json"
-        process_file(path, transform, insert_key=insert_key, output_path=out_path, lazy=increment)
-
-
 def main():
     args = parse_args()
     device = _resolve_device(args.device)
@@ -101,13 +85,12 @@ def main():
 
     if args.input.is_dir():
         output_dir = args.output or args.input.with_name(f"{args.input.name}_{args.tag}")
-        _process_dir(
+        process_dir(
             args.input,
-            output_dir,
             transform,
             insert_key=args.insert_key,
-            tag=args.tag,
-            increment=args.increment,
+            output_dir=output_dir,
+            lazy=args.increment,
         )
     else:
         input_file = args.input

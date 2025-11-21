@@ -90,10 +90,7 @@ def _process_dir(
         if path.is_dir() or path.suffix != ".json" or path.name.startswith("_"):
             continue
         out_path = output_dir / f"{path.stem}_{tag}.json"
-        if increment and out_path.exists():
-            print(f"⏭️  Skipping {path.name} (exists).")
-            continue
-        process_file(path, transform, insert_key=insert_key, output_path=out_path)
+        process_file(path, transform, insert_key=insert_key, output_path=out_path, lazy=increment)
 
 
 def main():
@@ -121,15 +118,12 @@ def main():
         else:
             output_path = input_file.with_name(f"{input_file.stem}_{args.tag}.json")
 
-        if args.increment and Path(output_path).exists():
-            print(f"⏭️  Skipping {output_path} (exists).")
-            return
-
         process_file(
             input_file,
             transform,
             insert_key=args.insert_key,
             output_path=output_path,
+            lazy=args.increment,
         )
 
 

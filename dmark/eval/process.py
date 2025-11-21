@@ -19,6 +19,7 @@ def process_file(
     *,
     insert_key: str = "processed",
     output_path: Path | None = None,
+    lazy: bool = False,
 ) -> Path:
     """Process one JSON file and write the modified copy.
 
@@ -32,6 +33,9 @@ def process_file(
     else:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if lazy and output_path.exists():
+        return output_path
 
     with input_path.open("r") as f:
         data = json.load(f)
@@ -56,6 +60,7 @@ def process_dir(
     *,
     insert_key: str = "processed",
     output_dir: Path,
+    lazy: bool = False,
 ) -> list[Path]:
     """Process all .json files in a directory, writing to output_dir."""
     input_dir = Path(input_dir)
@@ -72,6 +77,7 @@ def process_dir(
                 transform,
                 insert_key=insert_key,
                 output_path=output_dir / path.name,
+                lazy=lazy,
             )
         )
     return outputs

@@ -84,23 +84,31 @@ def main():
             if key is not None and scores:
                 groups[key].extend(scores)
 
-    thresholds: dict[str, dict[str, float | int]] = {}
+    thresholds: list[dict[str, object]] = []
     for key, scores in groups.items():
         if not scores:
             continue
-        entry = {"count": len(scores)}
+        entry = {
+            "generation_metadata": json.loads(key),
+            "count": len(scores),
+        }
         for q in args.quantiles:
             entry[f"q{q}"] = percentile(scores, q)
-        thresholds[key] = entry
+        thresholds.append(entry)
 
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         with args.output.open("w") as f:
             json.dump(thresholds, f, indent=2)
     else:
-        for key, entry in thresholds.items():
-            parts = [f"{k}={v:.3f}" if k != "count" else f"{k}={v}" for k, v in entry.items()]
-            print(f"{key}: " + ", ".join(parts))
+        for entry in thresholds:
+            meta = entry.get("generation_metadata", {})
+            parts = [f"count={entry['count']}"]
+            for k, v in entry.items():
+                if k in {"generation_metadata", "count"}:
+                    continue
+                parts.append(f"{k}={v:.3f}")
+            print(f"{meta}: " + ", ".join(parts))
 
 
 if __name__ == "__main__":

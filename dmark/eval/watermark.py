@@ -57,6 +57,7 @@ def _make_transform(tokenizer, watermark, token_field: str, insert_key: str) -> 
         flat_tokens = prompt_ids + tokens
         tensor = torch.tensor(flat_tokens, dtype=torch.long)
         detection = watermark.detect(tensor, len(prompt_ids))
+        detection["watermark_metadata"] = dict(watermark.watermark_config)
         return detection
 
     return transform
@@ -77,6 +78,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ratio", type=float, default=0.5)
     parser.add_argument("--delta", type=float, default=2.0)
     parser.add_argument("--key", type=int, default=42)
+    parser.add_argument(
+        "--increment",
+        action="store_true",
+        help="Skip writing output files that already exist (lazy mode).",
+    )
     parser.add_argument(
         "--strategy",
         type=str,
@@ -102,7 +108,13 @@ def main():
         return _make_transform(tokenizer, watermark, args.token_field, args.insert_key)(instance)
 
     if args.input.is_file():
-        process_file(args.input, transform_with_meta, insert_key=args.insert_key, output_path=args.output)
+        process_file(
+            args.input,
+            transform_with_meta,
+            insert_key=args.insert_key,
+            output_path=args.output,
+            lazy=args.increment,
+        )
     else:
         if args.output_dir is None:
             raise ValueError("--output-dir is required when --input is a directory")
@@ -111,6 +123,7 @@ def main():
             transform_with_meta,
             insert_key=args.insert_key,
             output_dir=args.output_dir,
+            lazy=args.increment,
         )
 
 

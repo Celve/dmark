@@ -6,6 +6,7 @@ an input directory.
 """
 
 import argparse
+import json
 from pathlib import Path
 from typing import Callable, Any
 
@@ -16,28 +17,29 @@ from dmark.eval.process import process_file, process_dir
 from dmark.gen.utils import build_watermark
 
 
-def _build_watermark(args: argparse.Namespace):
-    bitmap_path = None
-    if args.strategy != "pattern-mark":
-        ratio_int = int(args.ratio * 100)
-        fname = f"bitmap_v{args.vocab_size}_r{ratio_int}_k{args.key}.bin"
+def _resolve_config(instance: dict, args: argparse.Namespace) -> dict[str, object]:
+    meta = instance.get("watermark_metadata") or instance.get("watermark") or {}
+    cfg = {
+        "vocab_size": meta.get("vocab_size", args.vocab_size),
+        "ratio": meta.get("ratio", args.ratio),
+        "delta": meta.get("delta", args.delta),
+        "key": meta.get("key", args.key),
+        "strategy": meta.get("strategy", args.strategy),
+        "pattern_length": meta.get("pattern_length", args.pattern_length),
+    }
+    if cfg["strategy"] != "pattern-mark":
+        ratio_int = int(cfg["ratio"] * 100)
+        fname = f"bitmap_v{cfg['vocab_size']}_r{ratio_int}_k{cfg['key']}.bin"
         bitmap_path = Path(args.bitmap_dir) / fname
         if not bitmap_path.exists():
             raise FileNotFoundError(
                 f"Bitmap not found at {bitmap_path}. "
                 "Provide --bitmap-dir that contains generated bitmaps or adjust parameters."
             )
-
-    cfg: dict[str, object] = {
-        "vocab_size": args.vocab_size,
-        "ratio": args.ratio,
-        "delta": args.delta,
-        "key": args.key,
-        "strategy": args.strategy,
-        "bitmap_path": str(bitmap_path) if bitmap_path is not None else "",
-        "pattern_length": args.pattern_length,
-    }
-    return build_watermark(cfg, bitmap_device=args.bitmap_device, mask_id=args.mask_id)
+        cfg["bitmap_path"] = str(bitmap_path)
+    else:
+        cfg["bitmap_path"] = ""
+    return cfg
 
 
 def _make_transform(tokenizer, watermark, token_field: str, insert_key: str) -> Callable[[dict], dict]:
@@ -88,23 +90,25 @@ def parse_args() -> argparse.Namespace:
 def main():
     args = parse_args()
     tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True)
-    watermark = _build_watermark(args)
+    cache: dict[str, object] = {}
 
-    transform = _make_transform(tokenizer, watermark, args.token_field, args.insert_key)
+    def transform_with_meta(instance: dict) -> dict:
+        cfg = _resolve_config(instance, args)
+        cfg_key = json.dumps(cfg, sort_keys=True)
+        watermark = cache.get(cfg_key)
+        if watermark is None:
+            watermark = build_watermark(cfg, bitmap_device=args.bitmap_device, mask_id=args.mask_id)
+            cache[cfg_key] = watermark
+        return _make_transform(tokenizer, watermark, args.token_field, args.insert_key)(instance)
 
     if args.input.is_file():
-        process_file(
-            args.input,
-            transform,
-            insert_key=args.insert_key,
-            output_path=args.output,
-        )
+        process_file(args.input, transform_with_meta, insert_key=args.insert_key, output_path=args.output)
     else:
         if args.output_dir is None:
             raise ValueError("--output-dir is required when --input is a directory")
         process_dir(
             args.input,
-            transform,
+            transform_with_meta,
             insert_key=args.insert_key,
             output_dir=args.output_dir,
         )

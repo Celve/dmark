@@ -55,6 +55,18 @@ print("avg z:", total / count if count else "n/a")
 
 Reference CLI built on `process.py`; prints average z-scores per file for a file or directory input.
 
+Usage:
+```bash
+python -m dmark.view.zscore --input results_dir
+python -m dmark.view.zscore --input single_results.json
+```
+
 ### fpr.py
 
 Computes z-score quantile thresholds (e.g., 0.999 / 0.99) per generation config present in a file or directory. Outputs to stdout or JSON via `--output`.
+
+Usage:
+```bash
+python -m dmark.view.fpr --input results_dir --quantiles 0.999 0.99 --output thresholds.json
+python -m dmark.view.fpr --input single_results.json
+```
